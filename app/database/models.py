@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy.orm import relationship
 
 from app.database.database import Base
 
@@ -77,4 +78,68 @@ class Department(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False
+    )
+
+
+
+
+
+class Faculty(Base):
+
+    __tablename__ = "faculties"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        unique=True,
+        nullable=False
+    )
+
+    faculty_id = Column(
+        String(50),
+        unique=True,
+        index=True,
+        nullable=False
+    )
+
+    name = Column(
+        String(100),
+        nullable=False
+    )
+
+    phone = Column(
+        String(20),
+        nullable=True
+    )
+
+    designation = Column(
+        String(100),
+        nullable=True
+    )
+
+    department_id = Column(
+        Integer,
+        ForeignKey("departments.id"),
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    user = relationship(
+        "User"
+    )
+
+    department = relationship(
+        "Department",
+        back_populates="faculties"
     )
