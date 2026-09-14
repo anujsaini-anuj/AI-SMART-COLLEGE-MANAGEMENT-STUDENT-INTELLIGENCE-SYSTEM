@@ -143,3 +143,71 @@ class Faculty(Base):
         "Department",
         back_populates="faculties"
     )
+
+
+
+
+
+
+class Student(Base):
+
+    __tablename__ = "students"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        unique=True,
+        nullable=False
+    )
+
+    student_id = Column(
+        String(50),
+        unique=True,
+        index=True,
+        nullable=False
+    )
+
+    name = Column(
+        String(100),
+        nullable=False
+    )
+
+    phone = Column(
+        String(20),
+        nullable=True
+    )
+
+    department_id = Column(
+        Integer,
+        ForeignKey("departments.id"),
+        nullable=False
+    )
+
+    course = Column(
+        String(100),
+        nullable=False
+    )
+
+    semester = Column(
+        Integer,
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    user = relationship("User")
+
+    department = relationship(
+        "Department",
+        back_populates="students"
+    )
