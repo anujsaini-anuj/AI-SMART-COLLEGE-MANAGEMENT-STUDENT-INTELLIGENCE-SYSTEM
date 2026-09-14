@@ -4,6 +4,7 @@ from app.database.database import Base, engine
 from app.database.models import User
 
 from app.routers.auth import router as auth_router
+from app.routers.department import router as department_router
 
 
 
@@ -24,3 +25,4 @@ def root():
 
 
 app.include_router(auth_router)
+app.include_router(department_router)
