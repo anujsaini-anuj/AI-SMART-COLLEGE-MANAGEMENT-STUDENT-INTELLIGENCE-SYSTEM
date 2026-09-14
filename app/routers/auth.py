@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Form
 from fastapi.security import OAuth2PasswordRequestForm
 
 from sqlalchemy.orm import Session
@@ -7,10 +7,7 @@ from app.database.database import get_db
 from app.database.models import User
 
 from app.schemas.auth import (
-    RegisterRequest,
-    CreateUserRequest,
-    LoginResponse,
-    UserResponse
+    LoginResponse
 )
 
 from app.utils.security import (
@@ -20,8 +17,9 @@ from app.utils.security import (
 
 from app.utils.auth import (
     create_access_token,
-    get_current_user,
-    require_admin
+    require_admin,
+    require_faculty,
+    get_current_user
 )
 
 
@@ -29,46 +27,6 @@ router = APIRouter(
     prefix="/auth",
     tags=["Authentication"]
 )
-
-
-# --------------------------------------------------
-# STUDENT REGISTRATION
-# --------------------------------------------------
-
-@router.post("/register")
-def register(
-    data: RegisterRequest,
-    db: Session = Depends(get_db)
-):
-
-    existing_user = db.query(User).filter(
-        User.email == data.email
-    ).first()
-
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
-
-    user = User(
-        name=data.name,
-        email=data.email,
-        password_hash=hash_password(data.password),
-        role="student"
-    )
-
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
-    return {
-        "message": "Student registered successfully",
-        "user_id": user.id,
-        "name": user.name,
-        "email": user.email,
-        "role": user.role
-    }
 
 
 # --------------------------------------------------
@@ -124,43 +82,77 @@ def login(
 # CURRENT USER
 # --------------------------------------------------
 
-@router.get(
-    "/me",
-    response_model=UserResponse
-)
+@router.get("/me")
 def get_my_profile(
     current_user: User = Depends(get_current_user)
 ):
 
-    return current_user
+    return {
+        "id": current_user.id,
+        "name": current_user.name,
+        "email": current_user.email,
+        "role": current_user.role
+    }
 
 
 # --------------------------------------------------
-# ADMIN CREATES USER
+# ADMIN CREATES ADMIN
 # --------------------------------------------------
 
-@router.post(
-    "/admin/create-user"
-)
-def create_user(
-    data: CreateUserRequest,
+
+@router.post("/admin/create-admin")
+def create_admin(
+    name: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(require_admin)
+):
+    existing_user = db.query(User).filter(
+        User.email == email
+    ).first()
+
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already registered"
+        )
+
+    admin = User(
+        name=name,
+        email=email,
+        password_hash=hash_password(password),
+        role="admin"
+    )
+
+    db.add(admin)
+    db.commit()
+    db.refresh(admin)
+
+    return {
+        "message": "Admin created successfully",
+        "user_id": admin.id,
+        "name": admin.name,
+        "email": admin.email,
+        "role": admin.role
+    }
+
+
+# --------------------------------------------------
+# ADMIN CREATES FACULTY
+# --------------------------------------------------
+
+@router.post("/admin/create-faculty")
+def create_faculty(
+    name: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
     db: Session = Depends(get_db),
     current_admin: User = Depends(require_admin)
 ):
 
-    allowed_roles = [
-        "student",
-        "faculty"
-    ]
-
-    if data.role not in allowed_roles:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only student and faculty accounts can be created"
-        )
-
     existing_user = db.query(User).filter(
-        User.email == data.email
+        User.email == email
     ).first()
 
     if existing_user:
@@ -169,21 +161,64 @@ def create_user(
             detail="Email already registered"
         )
 
-    user = User(
-        name=data.name,
-        email=data.email,
-        password_hash=hash_password(data.password),
-        role=data.role
+    faculty = User(
+        name=name,
+        email=email,
+        password_hash=hash_password(password),
+        role="faculty"
     )
 
-    db.add(user)
+    db.add(faculty)
     db.commit()
-    db.refresh(user)
+    db.refresh(faculty)
 
     return {
-        "message": "User created successfully",
-        "user_id": user.id,
-        "name": user.name,
-        "email": user.email,
-        "role": user.role
+        "message": "Faculty created successfully",
+        "user_id": faculty.id,
+        "name": faculty.name,
+        "email": faculty.email,
+        "role": faculty.role
+    }
+
+
+# --------------------------------------------------
+# FACULTY CREATES STUDENT
+# --------------------------------------------------
+
+@router.post("/faculty/create-student")
+def create_student(
+    name: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db),
+    current_faculty: User = Depends(require_faculty)
+):
+
+    existing_user = db.query(User).filter(
+        User.email == email
+    ).first()
+
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
+
+    student = User(
+        name=name,
+        email=email,
+        password_hash=hash_password(password),
+        role="student"
+    )
+
+    db.add(student)
+    db.commit()
+    db.refresh(student)
+
+    return {
+        "message": "Student created successfully",
+        "user_id": student.id,
+        "name": student.name,
+        "email": student.email,
+        "role": student.role
     }

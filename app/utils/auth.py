@@ -5,7 +5,11 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+from fastapi.security import (
+    HTTPBearer,
+    HTTPAuthorizationCredentials
+)
 
 from jose import JWTError, jwt
 
@@ -24,6 +28,7 @@ ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(
     os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 )
+
 
 security = HTTPBearer()
 
@@ -62,7 +67,6 @@ def get_current_user(
 
     token = credentials.credentials
 
-
     try:
 
         payload = jwt.decode(
@@ -94,6 +98,7 @@ def require_admin(
 ):
 
     if current_user.role != "admin":
+
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required"
@@ -107,6 +112,7 @@ def require_faculty(
 ):
 
     if current_user.role not in ["admin", "faculty"]:
+
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Faculty access required"
@@ -120,6 +126,7 @@ def require_student(
 ):
 
     if current_user.role != "student":
+
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Student access required"
