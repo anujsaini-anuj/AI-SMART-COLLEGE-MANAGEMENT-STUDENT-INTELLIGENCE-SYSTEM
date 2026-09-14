@@ -269,3 +269,65 @@ class Course(Base):
         "Department",
         back_populates="courses"
     )
+
+    subjects = relationship(
+    "Subject",
+    back_populates="course"
+    )
+
+
+
+
+class Subject(Base):
+
+    __tablename__ = "subjects"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    name = Column(
+        String(100),
+        nullable=False
+    )
+
+    code = Column(
+        String(50),
+        unique=True,
+        index=True,
+        nullable=False
+    )
+
+    credits = Column(
+        Integer,
+        nullable=False
+    )
+
+    semester = Column(
+        Integer,
+        nullable=False
+    )
+
+    description = Column(
+        String(255),
+        nullable=True
+    )
+
+    course_id = Column(
+        Integer,
+        ForeignKey("courses.id"),
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    course = relationship(
+        "Course",
+        back_populates="subjects"
+    )
