@@ -81,6 +81,12 @@ class Department(Base):
     )
 
 
+    courses = relationship(
+    "Course",
+    back_populates="department"
+    )
+
+
 
 
 
@@ -210,4 +216,56 @@ class Student(Base):
     department = relationship(
         "Department",
         back_populates="students"
+    )
+
+
+
+
+class Course(Base):
+
+    __tablename__ = "courses"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    name = Column(
+        String(100),
+        nullable=False
+    )
+
+    code = Column(
+        String(50),
+        unique=True,
+        index=True,
+        nullable=False
+    )
+
+    duration = Column(
+        Integer,
+        nullable=False
+    )
+
+    description = Column(
+        String(255),
+        nullable=True
+    )
+
+    department_id = Column(
+        Integer,
+        ForeignKey("departments.id"),
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    department = relationship(
+        "Department",
+        back_populates="courses"
     )
