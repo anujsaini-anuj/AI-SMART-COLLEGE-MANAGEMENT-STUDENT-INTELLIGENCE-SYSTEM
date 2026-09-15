@@ -5,7 +5,9 @@ from sqlalchemy import (
     Integer,
     String,
     DateTime,
-    ForeignKey
+    ForeignKey,
+    Date,
+    UniqueConstraint
 )
 
 from sqlalchemy.orm import relationship
@@ -383,4 +385,68 @@ class Subject(Base):
     course = relationship(
         "Course",
         back_populates="subjects"
+    )
+
+
+
+# ==================================================
+# ATTENDANCE
+# ==================================================
+
+class Attendance(Base):
+
+    __tablename__ = "attendance"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "student_id",
+            "subject_id",
+            "date",
+            name="unique_student_subject_attendance"
+        ),
+    )
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    student_id = Column(
+        String(50),
+        ForeignKey("students.student_id"),
+        nullable=False
+    )
+
+    subject_id = Column(
+        Integer,
+        ForeignKey("subjects.id"),
+        nullable=False
+    )
+
+    date = Column(
+        Date,
+        nullable=False
+    )
+
+    status = Column(
+        String(20),
+        nullable=False,
+        default="Present"
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    # Attendance → Student
+    student = relationship(
+        "Student"
+    )
+
+    # Attendance → Subject
+    subject = relationship(
+        "Subject"
     )
