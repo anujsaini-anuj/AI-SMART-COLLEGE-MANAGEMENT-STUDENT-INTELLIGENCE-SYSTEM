@@ -1,12 +1,24 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    DateTime,
+    ForeignKey
+)
+
 from sqlalchemy.orm import relationship
 
 from app.database.database import Base
 
 
+# ==================================================
+# USER
+# ==================================================
+
 class User(Base):
+
     __tablename__ = "users"
 
     id = Column(
@@ -45,7 +57,9 @@ class User(Base):
     )
 
 
-
+# ==================================================
+# DEPARTMENT
+# ==================================================
 
 class Department(Base):
 
@@ -80,15 +94,28 @@ class Department(Base):
         nullable=False
     )
 
+    # Department → Faculty
+    faculties = relationship(
+        "Faculty",
+        back_populates="department"
+    )
 
+    # Department → Student
+    students = relationship(
+        "Student",
+        back_populates="department"
+    )
+
+    # Department → Course
     courses = relationship(
-    "Course",
-    back_populates="department"
+        "Course",
+        back_populates="department"
     )
 
 
-
-
+# ==================================================
+# FACULTY
+# ==================================================
 
 class Faculty(Base):
 
@@ -141,85 +168,21 @@ class Faculty(Base):
         nullable=False
     )
 
+    # Faculty → User
     user = relationship(
         "User"
     )
 
+    # Faculty → Department
     department = relationship(
         "Department",
         back_populates="faculties"
     )
 
 
-
-
-
-
-class Student(Base):
-
-    __tablename__ = "students"
-
-    id = Column(
-        Integer,
-        primary_key=True,
-        index=True
-    )
-
-    user_id = Column(
-        Integer,
-        ForeignKey("users.id"),
-        unique=True,
-        nullable=False
-    )
-
-    student_id = Column(
-        String(50),
-        unique=True,
-        index=True,
-        nullable=False
-    )
-
-    name = Column(
-        String(100),
-        nullable=False
-    )
-
-    phone = Column(
-        String(20),
-        nullable=True
-    )
-
-    department_id = Column(
-        Integer,
-        ForeignKey("departments.id"),
-        nullable=False
-    )
-
-    course = Column(
-        String(100),
-        nullable=False
-    )
-
-    semester = Column(
-        Integer,
-        nullable=False
-    )
-
-    created_at = Column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        nullable=False
-    )
-
-    user = relationship("User")
-
-    department = relationship(
-        "Department",
-        back_populates="students"
-    )
-
-
-
+# ==================================================
+# COURSE
+# ==================================================
 
 class Course(Base):
 
@@ -265,18 +228,107 @@ class Course(Base):
         nullable=False
     )
 
+    # Course → Department
     department = relationship(
         "Department",
         back_populates="courses"
     )
 
+    # Course → Subjects
     subjects = relationship(
-    "Subject",
-    back_populates="course"
+        "Subject",
+        back_populates="course"
+    )
+
+    # Course → Students
+    students = relationship(
+        "Student",
+        back_populates="course"
     )
 
 
+# ==================================================
+# STUDENT
+# ==================================================
 
+class Student(Base):
+
+    __tablename__ = "students"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        unique=True,
+        nullable=False
+    )
+
+    student_id = Column(
+        String(50),
+        unique=True,
+        index=True,
+        nullable=False
+    )
+
+    name = Column(
+        String(100),
+        nullable=False
+    )
+
+    phone = Column(
+        String(20),
+        nullable=True
+    )
+
+    department_id = Column(
+        Integer,
+        ForeignKey("departments.id"),
+        nullable=False
+    )
+
+    course_id = Column(
+        Integer,
+        ForeignKey("courses.id"),
+        nullable=False
+    )
+
+    semester = Column(
+        Integer,
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    # Student → User
+    user = relationship(
+        "User"
+    )
+
+    # Student → Department
+    department = relationship(
+        "Department",
+        back_populates="students"
+    )
+
+    # Student → Course
+    course = relationship(
+        "Course",
+        back_populates="students"
+    )
+
+
+# ==================================================
+# SUBJECT
+# ==================================================
 
 class Subject(Base):
 
@@ -327,6 +379,7 @@ class Subject(Base):
         nullable=False
     )
 
+    # Subject → Course
     course = relationship(
         "Course",
         back_populates="subjects"

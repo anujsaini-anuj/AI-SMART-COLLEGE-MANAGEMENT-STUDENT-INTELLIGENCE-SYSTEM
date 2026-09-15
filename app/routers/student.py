@@ -1,10 +1,23 @@
-from fastapi import APIRouter, Depends, HTTPException, Form
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Form
+)
+
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
-from app.database.models import Student, User, Department
+
+from app.database.models import (
+    Student,
+    User,
+    Department,
+    Course
+)
 
 from app.utils.auth import require_faculty
+
 from app.utils.security import hash_password
 
 
@@ -26,14 +39,17 @@ def create_student(
     student_id: str = Form(...),
     phone: str | None = Form(None),
     department_id: int = Form(...),
-    course: str = Form(...),
+    course_id: int = Form(...),
     semester: int = Form(...),
 
     db: Session = Depends(get_db),
     current_faculty: User = Depends(require_faculty)
 ):
 
-    # Check email
+    # ----------------------------------------------
+    # CHECK EMAIL
+    # ----------------------------------------------
+
     existing_user = db.query(User).filter(
         User.email == email
     ).first()
@@ -44,7 +60,11 @@ def create_student(
             detail="Email already registered"
         )
 
-    # Check Student ID
+
+    # ----------------------------------------------
+    # CHECK STUDENT ID
+    # ----------------------------------------------
+
     existing_student = db.query(Student).filter(
         Student.student_id == student_id
     ).first()
@@ -55,7 +75,11 @@ def create_student(
             detail="Student ID already exists"
         )
 
-    # Check department
+
+    # ----------------------------------------------
+    # CHECK DEPARTMENT
+    # ----------------------------------------------
+
     department = db.query(Department).filter(
         Department.id == department_id
     ).first()
@@ -66,35 +90,72 @@ def create_student(
             detail="Department not found"
         )
 
-    # Validate semester
+
+    # ----------------------------------------------
+    # CHECK COURSE
+    # ----------------------------------------------
+
+    course = db.query(Course).filter(
+        Course.id == course_id
+    ).first()
+
+    if not course:
+        raise HTTPException(
+            status_code=404,
+            detail="Course not found"
+        )
+
+
+    # ----------------------------------------------
+    # COURSE MUST BELONG TO DEPARTMENT
+    # ----------------------------------------------
+
+    if course.department_id != department_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Selected course does not belong to selected department"
+        )
+
+
+    # ----------------------------------------------
+    # VALIDATE SEMESTER
+    # ----------------------------------------------
+
     if semester < 1 or semester > 12:
         raise HTTPException(
             status_code=400,
             detail="Semester must be between 1 and 12"
         )
 
-    # Create login account
+
+    # ----------------------------------------------
+    # CREATE USER ACCOUNT
+    # ----------------------------------------------
+
     user = User(
         name=name,
         email=email,
-        password_hash=__import__(
-            "app.utils.security",
-            fromlist=["hash_password"]
-        ).hash_password(password),
+        password_hash=hash_password(password),
         role="student"
     )
 
     db.add(user)
+
+    # Generate user.id before creating Student
     db.flush()
 
-    # Create student profile
+
+    # ----------------------------------------------
+    # CREATE STUDENT PROFILE
+    # ----------------------------------------------
+
     student = Student(
         user_id=user.id,
         student_id=student_id,
         name=name,
         phone=phone,
         department_id=department_id,
-        course=course,
+        course_id=course_id,
         semester=semester
     )
 
@@ -105,14 +166,22 @@ def create_student(
     db.refresh(user)
     db.refresh(student)
 
+
+    # ----------------------------------------------
+    # RESPONSE
+    # ----------------------------------------------
+
     return {
         "message": "Student created successfully",
-        "student_profile_id": student.id,
+        "id": student.id,
         "student_id": student.student_id,
         "name": student.name,
         "email": user.email,
+        "phone": student.phone,
+        "department_id": department.id,
         "department": department.name,
-        "course": student.course,
+        "course_id": course.id,
+        "course": course.name,
         "semester": student.semester
     }
 
@@ -139,8 +208,10 @@ def get_all_students(
             "name": student.name,
             "phone": student.phone,
             "email": student.user.email,
+            "department_id": student.department_id,
             "department": student.department.name,
-            "course": student.course,
+            "course_id": student.course_id,
+            "course": student.course.name,
             "semester": student.semester
         })
 
@@ -174,8 +245,10 @@ def get_student(
         "name": student.name,
         "phone": student.phone,
         "email": student.user.email,
+        "department_id": student.department_id,
         "department": student.department.name,
-        "course": student.course,
+        "course_id": student.course_id,
+        "course": student.course.name,
         "semester": student.semester
     }
 
@@ -201,12 +274,17 @@ def delete_student(
             detail="Student not found"
         )
 
+
+    # Find linked user
     user = db.query(User).filter(
         User.id == student.user_id
     ).first()
 
+
+    # Delete student profile
     db.delete(student)
 
+    # Delete login account
     if user:
         db.delete(user)
 
