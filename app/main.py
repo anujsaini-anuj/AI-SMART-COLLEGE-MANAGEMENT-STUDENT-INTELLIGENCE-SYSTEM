@@ -1,7 +1,7 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI
 
 from app.database.database import Base, engine
-from app.database.models import User
+
 
 from app.routers.auth import router as auth_router
 from app.routers.department import router as department_router
