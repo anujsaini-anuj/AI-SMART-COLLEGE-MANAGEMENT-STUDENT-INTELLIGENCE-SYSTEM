@@ -524,3 +524,83 @@ class Marks(Base):
     subject = relationship(
         "Subject"
     )
+
+
+
+
+# ==================================================
+# ASSIGNMENT
+# ==================================================
+
+class Assignment(Base):
+
+    __tablename__ = "assignments"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "student_id",
+            "subject_id",
+            "assignment_name",
+            name="unique_student_subject_assignment"
+        ),
+    )
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    student_id = Column(
+        String(50),
+        ForeignKey("students.student_id"),
+        nullable=False
+    )
+
+    subject_id = Column(
+        Integer,
+        ForeignKey("subjects.id"),
+        nullable=False
+    )
+
+    assignment_name = Column(
+        String(100),
+        nullable=False
+    )
+
+    marks_obtained = Column(
+        Integer,
+        nullable=True
+    )
+
+    max_marks = Column(
+        Integer,
+        nullable=False
+    )
+
+    submission_date = Column(
+        Date,
+        nullable=True
+    )
+
+    status = Column(
+        String(20),
+        nullable=False,
+        default="Pending"
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    # Assignment → Student
+    student = relationship(
+        "Student"
+    )
+
+    # Assignment → Subject
+    subject = relationship(
+        "Subject"
+    )

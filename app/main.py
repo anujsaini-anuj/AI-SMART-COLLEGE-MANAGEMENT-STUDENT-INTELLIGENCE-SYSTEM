@@ -11,7 +11,7 @@ from app.routers.course import router as course_router
 from app.routers.subject import router as subject_router
 from app.routers.attendance import router as attendance_router
 from app.routers.marks import router as marks_router
-
+from app.routers.assignment import router as assignment_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -37,4 +37,5 @@ app.include_router(course_router)
 app.include_router(subject_router)
 app.include_router(attendance_router)
 app.include_router(marks_router)
+app.include_router(assignment_router)
 
