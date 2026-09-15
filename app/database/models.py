@@ -450,3 +450,77 @@ class Attendance(Base):
     subject = relationship(
         "Subject"
     )
+
+
+
+
+# ==================================================
+# MARKS
+# ==================================================
+
+class Marks(Base):
+
+    __tablename__ = "marks"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "student_id",
+            "subject_id",
+            "exam_type",
+            name="unique_student_subject_exam"
+        ),
+    )
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    student_id = Column(
+        String(50),
+        ForeignKey("students.student_id"),
+        nullable=False
+    )
+
+    subject_id = Column(
+        Integer,
+        ForeignKey("subjects.id"),
+        nullable=False
+    )
+
+    exam_type = Column(
+        String(50),
+        nullable=False
+    )
+
+    marks_obtained = Column(
+        Integer,
+        nullable=False
+    )
+
+    max_marks = Column(
+        Integer,
+        nullable=False
+    )
+
+    exam_date = Column(
+        Date,
+        nullable=True
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    # Marks → Student
+    student = relationship(
+        "Student"
+    )
+
+    # Marks → Subject
+    subject = relationship(
+        "Subject"
+    )
