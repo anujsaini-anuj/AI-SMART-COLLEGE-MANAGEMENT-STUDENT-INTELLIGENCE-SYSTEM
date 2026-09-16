@@ -293,3 +293,70 @@ def get_my_risk(
             for risk in risk_records
         ]
     }
+
+
+
+# ---------------------------------------------------
+# EARLY WARNING FOR ONE STUDENT
+# ---------------------------------------------------
+
+@router.get("/student/{student_id}/warning")
+def get_student_warning(
+    student_id: str,
+    db: Session = Depends(get_db),
+    current_faculty=Depends(require_faculty)
+):
+
+    student = db.query(Student).filter(
+        Student.student_id == student_id
+    ).first()
+
+    if not student:
+        raise HTTPException(
+            status_code=404,
+            detail="Student not found"
+        )
+
+    risk_records = db.query(StudentRisk).filter(
+        StudentRisk.student_id == student_id
+    ).all()
+
+    if not risk_records:
+        raise HTTPException(
+            status_code=404,
+            detail="Risk has not been calculated yet"
+        )
+
+    warnings = []
+
+    for risk in risk_records:
+
+        if risk.risk_level == "High":
+
+            warning = "Immediate attention required"
+
+        elif risk.risk_level == "Medium":
+
+            warning = "Student needs academic attention"
+
+        else:
+
+            warning = "No immediate warning"
+
+        warnings.append({
+            "subject_id": risk.subject.id,
+            "subject_name": risk.subject.name,
+            "risk_score": risk.risk_score,
+            "risk_level": risk.risk_level,
+            "risk_reason": risk.risk_reason,
+            "warning": warning
+        })
+
+    return {
+        "student_id": student.student_id,
+        "student_name": student.name,
+        "early_warning": warnings
+    }
+
+
+
