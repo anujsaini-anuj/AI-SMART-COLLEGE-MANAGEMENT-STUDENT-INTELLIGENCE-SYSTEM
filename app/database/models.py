@@ -681,3 +681,61 @@ class Performance(Base):
     subject = relationship(
         "Subject"
     )
+
+
+
+
+class StudentRisk(Base):
+
+    __tablename__ = "student_risk"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "student_id",
+            "subject_id",
+            name="unique_student_subject_risk"
+        ),
+    )
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    student_id = Column(
+        String(50),
+        ForeignKey("students.student_id"),
+        nullable=False
+    )
+
+    subject_id = Column(
+        Integer,
+        ForeignKey("subjects.id"),
+        nullable=False
+    )
+
+    risk_score = Column(
+        Integer,
+        nullable=False
+    )
+
+    risk_level = Column(
+        String(30),
+        nullable=False
+    )
+
+    risk_reason = Column(
+        String(500),
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    student = relationship("Student")
+
+    subject = relationship("Subject")

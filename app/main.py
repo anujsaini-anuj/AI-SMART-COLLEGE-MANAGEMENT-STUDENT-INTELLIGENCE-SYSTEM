@@ -13,7 +13,7 @@ from app.routers.attendance import router as attendance_router
 from app.routers.marks import router as marks_router
 from app.routers.assignment import router as assignment_router
 from app.routers.performance import router as performance_router
-
+from app.routers.risk import router as risk_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -41,3 +41,4 @@ app.include_router(attendance_router)
 app.include_router(marks_router)
 app.include_router(assignment_router)
 app.include_router(performance_router)
+app.include_router(risk_router)
