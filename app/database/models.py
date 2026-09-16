@@ -604,3 +604,80 @@ class Assignment(Base):
     subject = relationship(
         "Subject"
     )
+
+
+
+# ==================================================
+# PERFORMANCE
+# ==================================================
+
+class Performance(Base):
+
+    __tablename__ = "performance"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "student_id",
+            "subject_id",
+            name="unique_student_subject_performance"
+        ),
+    )
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    student_id = Column(
+        String(50),
+        ForeignKey("students.student_id"),
+        nullable=False
+    )
+
+    subject_id = Column(
+        Integer,
+        ForeignKey("subjects.id"),
+        nullable=False
+    )
+
+    attendance_percentage = Column(
+        Integer,
+        nullable=False
+    )
+
+    marks_percentage = Column(
+        Integer,
+        nullable=False
+    )
+
+    assignment_percentage = Column(
+        Integer,
+        nullable=False
+    )
+
+    overall_percentage = Column(
+        Integer,
+        nullable=False
+    )
+
+    performance_level = Column(
+        String(30),
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    # Performance → Student
+    student = relationship(
+        "Student"
+    )
+
+    # Performance → Subject
+    subject = relationship(
+        "Subject"
+    )
