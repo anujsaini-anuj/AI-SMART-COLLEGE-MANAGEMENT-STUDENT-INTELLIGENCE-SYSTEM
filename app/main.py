@@ -15,7 +15,7 @@ from app.routers.assignment import router as assignment_router
 from app.routers.performance import router as performance_router
 from app.routers.risk import router as risk_router
 from app.routers.prediction import router as prediction_router
-
+from app.routers.segmentation import router as segmentation_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -45,3 +45,4 @@ app.include_router(assignment_router)
 app.include_router(performance_router)
 app.include_router(risk_router)
 app.include_router(prediction_router)
+app.include_router(segmentation_router)

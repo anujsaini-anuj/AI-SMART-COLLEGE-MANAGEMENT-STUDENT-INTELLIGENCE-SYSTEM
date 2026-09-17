@@ -259,7 +259,7 @@ def get_student(
 
 @router.delete("/{student_id}")
 def delete_student(
-    student_id: int,
+    student_id: str,
     db: Session = Depends(get_db),
     current_faculty: User = Depends(require_faculty)
 ):
