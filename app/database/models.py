@@ -792,3 +792,64 @@ class Prediction(Base):
 
     student = relationship("Student")
     subject = relationship("Subject")
+
+
+
+
+
+
+
+# ==================================================
+# RECOMMENDATION
+# ==================================================
+
+class Recommendation(Base):
+
+    __tablename__ = "recommendations"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    student_id = Column(
+        String(50),
+        ForeignKey("students.student_id"),
+        nullable=False
+    )
+
+    subject_id = Column(
+        Integer,
+        ForeignKey("subjects.id"),
+        nullable=False
+    )
+
+    recommendation_text = Column(
+        String(500),
+        nullable=False
+    )
+
+    recommendation_type = Column(
+        String(50),
+        nullable=False
+    )
+
+    priority = Column(
+        String(20),
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    student = relationship(
+        "Student"
+    )
+
+    subject = relationship(
+        "Subject"
+    )
