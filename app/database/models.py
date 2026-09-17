@@ -739,3 +739,56 @@ class StudentRisk(Base):
     student = relationship("Student")
 
     subject = relationship("Subject")
+
+
+
+
+class Prediction(Base):
+
+    __tablename__ = "predictions"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "student_id",
+            "subject_id",
+            name="unique_student_subject_prediction"
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    student_id = Column(
+        String(50),
+        ForeignKey("students.student_id"),
+        nullable=False
+    )
+
+    subject_id = Column(
+        Integer,
+        ForeignKey("subjects.id"),
+        nullable=False
+    )
+
+    predicted_performance = Column(
+        Integer,
+        nullable=False
+    )
+
+    predicted_level = Column(
+        String(30),
+        nullable=False
+    )
+
+    model_name = Column(
+        String(100),
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    student = relationship("Student")
+    subject = relationship("Subject")
