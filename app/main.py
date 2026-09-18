@@ -17,6 +17,7 @@ from app.routers.risk import router as risk_router
 from app.routers.prediction import router as prediction_router
 from app.routers.segmentation import router as segmentation_router
 from app.routers.recommendation import router as recommendation_router
+from app.routers.ai_assistant import router as ai_assistant_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -48,3 +49,4 @@ app.include_router(risk_router)
 app.include_router(prediction_router)
 app.include_router(segmentation_router)
 app.include_router(recommendation_router)
+app.include_router(ai_assistant_router)
