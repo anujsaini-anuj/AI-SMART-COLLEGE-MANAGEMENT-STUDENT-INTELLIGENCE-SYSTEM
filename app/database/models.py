@@ -182,6 +182,13 @@ class Faculty(Base):
     )
 
 
+    faculty_subjects = relationship(
+        "FacultySubject",
+        back_populates="faculty",
+        cascade="all, delete-orphan"
+    )
+
+
 # ==================================================
 # COURSE
 # ==================================================
@@ -385,6 +392,56 @@ class Subject(Base):
     course = relationship(
         "Course",
         back_populates="subjects"
+    )
+
+
+    faculty_subjects = relationship(
+        "FacultySubject",
+        back_populates="subject",
+        cascade="all, delete-orphan"
+    )
+
+
+
+
+class FacultySubject(Base):
+    __tablename__ = "faculty_subjects"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    faculty_id = Column(
+        Integer,
+        ForeignKey("faculties.id"),
+        nullable=False
+    )
+
+    subject_id = Column(
+        Integer,
+        ForeignKey("subjects.id"),
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc)
+    )
+
+    faculty = relationship(
+        "Faculty",
+        back_populates="faculty_subjects"
+    )
+
+    subject = relationship(
+        "Subject",
+        back_populates="faculty_subjects"
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "faculty_id",
+            "subject_id",
+            name="unique_faculty_subject"
+        ),
     )
 
 

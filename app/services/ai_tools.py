@@ -7,30 +7,129 @@ from app.database.models import (
     Marks,
     StudentRisk,
     Recommendation,
-    Subject
+    Subject,
+    Faculty,
+    FacultySubject
 )
 
 from langchain_core.tools import tool
 
 
 # ============================================================
-# HELPER FUNCTION
+# HELPER FUNCTIONS
 # ============================================================
 
 def _get_student(db: Session, student_id: str):
-    """
-    Find student using actual student ID like STU001.
-    """
+
     return db.query(Student).filter(
         Student.student_id == student_id
     ).first()
 
 
+def _get_subject(db: Session, subject_id: int):
+
+    return db.query(Subject).filter(
+        Subject.id == subject_id
+    ).first()
+
+
 # ============================================================
-# STUDENT DATA FUNCTIONS
+# FACULTY SUBJECT AUTHORIZATION
 # ============================================================
 
-def get_student_performance(db: Session, student_id: str):
+def faculty_has_subject_access(
+    db: Session,
+    faculty_user_id: int,
+    subject_id: int
+):
+    """
+    Check whether the logged-in faculty is assigned
+    to the requested subject.
+    """
+
+    faculty = db.query(Faculty).filter(
+        Faculty.user_id == faculty_user_id
+    ).first()
+
+    if not faculty:
+        return False
+
+    assignment = db.query(FacultySubject).filter(
+        FacultySubject.faculty_id == faculty.id,
+        FacultySubject.subject_id == subject_id
+    ).first()
+
+    return assignment is not None
+
+
+# ============================================================
+# CHECK STUDENT SUBJECT
+# ============================================================
+
+def student_has_subject(
+    db: Session,
+    student_id: str,
+    subject_id: int
+):
+    """
+    Check whether the student belongs to the subject.
+
+    In the current database design, a student's academic
+    records identify the subject through student_id + subject_id.
+    """
+
+    performance = db.query(Performance).filter(
+        Performance.student_id == student_id,
+        Performance.subject_id == subject_id
+    ).first()
+
+    if performance:
+        return True
+
+    attendance = db.query(Attendance).filter(
+        Attendance.student_id == student_id,
+        Attendance.subject_id == subject_id
+    ).first()
+
+    if attendance:
+        return True
+
+    marks = db.query(Marks).filter(
+        Marks.student_id == student_id,
+        Marks.subject_id == subject_id
+    ).first()
+
+    if marks:
+        return True
+
+    risk = db.query(StudentRisk).filter(
+        StudentRisk.student_id == student_id,
+        StudentRisk.subject_id == subject_id
+    ).first()
+
+    if risk:
+        return True
+
+    recommendation = db.query(Recommendation).filter(
+        Recommendation.student_id == student_id,
+        Recommendation.subject_id == subject_id
+    ).first()
+
+    if recommendation:
+        return True
+
+    return False
+
+
+# ============================================================
+# STUDENT PERFORMANCE
+# ============================================================
+
+def get_student_performance(
+    db: Session,
+    student_id: str,
+    subject_id: int | None = None
+):
 
     student = _get_student(db, student_id)
 
@@ -39,9 +138,16 @@ def get_student_performance(db: Session, student_id: str):
             "message": "Student not found."
         }
 
-    records = db.query(Performance).filter(
+    query = db.query(Performance).filter(
         Performance.student_id == student_id
-    ).all()
+    )
+
+    if subject_id is not None:
+        query = query.filter(
+            Performance.subject_id == subject_id
+        )
+
+    records = query.all()
 
     if not records:
         return {
@@ -52,15 +158,24 @@ def get_student_performance(db: Session, student_id: str):
 
     for performance in records:
 
-        subject = db.query(Subject).filter(
-            Subject.id == performance.subject_id
-        ).first()
+        subject = _get_subject(
+            db,
+            performance.subject_id
+        )
 
         result.append({
-            "student_id": student.student_id,
-            "student_name": student.name,
-            "subject_id": performance.subject_id,
-            "subject_name": subject.name if subject else "Unknown",
+            "student_id":
+                student.student_id,
+
+            "student_name":
+                student.name,
+
+            "subject_id":
+                performance.subject_id,
+
+            "subject_name":
+                subject.name if subject
+                else "Unknown",
 
             "attendance_percentage":
                 performance.attendance_percentage,
@@ -79,13 +194,26 @@ def get_student_performance(db: Session, student_id: str):
         })
 
     return {
-        "student_id": student.student_id,
-        "student_name": student.name,
-        "performance": result
+        "student_id":
+            student.student_id,
+
+        "student_name":
+            student.name,
+
+        "performance":
+            result
     }
 
 
-def get_student_attendance(db: Session, student_id: str):
+# ============================================================
+# STUDENT ATTENDANCE
+# ============================================================
+
+def get_student_attendance(
+    db: Session,
+    student_id: str,
+    subject_id: int | None = None
+):
 
     student = _get_student(db, student_id)
 
@@ -94,9 +222,16 @@ def get_student_attendance(db: Session, student_id: str):
             "message": "Student not found."
         }
 
-    records = db.query(Attendance).filter(
+    query = db.query(Attendance).filter(
         Attendance.student_id == student_id
-    ).order_by(
+    )
+
+    if subject_id is not None:
+        query = query.filter(
+            Attendance.subject_id == subject_id
+        )
+
+    records = query.order_by(
         Attendance.date.desc()
     ).all()
 
@@ -109,28 +244,53 @@ def get_student_attendance(db: Session, student_id: str):
 
     for attendance in records:
 
-        subject = db.query(Subject).filter(
-            Subject.id == attendance.subject_id
-        ).first()
+        subject = _get_subject(
+            db,
+            attendance.subject_id
+        )
 
         result.append({
-            "student_id": student.student_id,
-            "student_name": student.name,
-            "subject_id": attendance.subject_id,
+            "student_id":
+                student.student_id,
+
+            "student_name":
+                student.name,
+
+            "subject_id":
+                attendance.subject_id,
+
             "subject_name":
-                subject.name if subject else "Unknown",
-            "date": str(attendance.date),
-            "status": attendance.status
+                subject.name if subject
+                else "Unknown",
+
+            "date":
+                str(attendance.date),
+
+            "status":
+                attendance.status
         })
 
     return {
-        "student_id": student.student_id,
-        "student_name": student.name,
-        "attendance": result
+        "student_id":
+            student.student_id,
+
+        "student_name":
+            student.name,
+
+        "attendance":
+            result
     }
 
 
-def get_student_marks(db: Session, student_id: str):
+# ============================================================
+# STUDENT MARKS
+# ============================================================
+
+def get_student_marks(
+    db: Session,
+    student_id: str,
+    subject_id: int | None = None
+):
 
     student = _get_student(db, student_id)
 
@@ -139,9 +299,16 @@ def get_student_marks(db: Session, student_id: str):
             "message": "Student not found."
         }
 
-    records = db.query(Marks).filter(
+    query = db.query(Marks).filter(
         Marks.student_id == student_id
-    ).order_by(
+    )
+
+    if subject_id is not None:
+        query = query.filter(
+            Marks.subject_id == subject_id
+        )
+
+    records = query.order_by(
         Marks.exam_date.desc()
     ).all()
 
@@ -154,18 +321,27 @@ def get_student_marks(db: Session, student_id: str):
 
     for marks in records:
 
-        subject = db.query(Subject).filter(
-            Subject.id == marks.subject_id
-        ).first()
+        subject = _get_subject(
+            db,
+            marks.subject_id
+        )
 
         result.append({
-            "student_id": student.student_id,
-            "student_name": student.name,
-            "subject_id": marks.subject_id,
-            "subject_name":
-                subject.name if subject else "Unknown",
+            "student_id":
+                student.student_id,
 
-            "exam_type": marks.exam_type,
+            "student_name":
+                student.name,
+
+            "subject_id":
+                marks.subject_id,
+
+            "subject_name":
+                subject.name if subject
+                else "Unknown",
+
+            "exam_type":
+                marks.exam_type,
 
             "marks_obtained":
                 marks.marks_obtained,
@@ -180,13 +356,26 @@ def get_student_marks(db: Session, student_id: str):
         })
 
     return {
-        "student_id": student.student_id,
-        "student_name": student.name,
-        "marks": result
+        "student_id":
+            student.student_id,
+
+        "student_name":
+            student.name,
+
+        "marks":
+            result
     }
 
 
-def get_student_risk(db: Session, student_id: str):
+# ============================================================
+# STUDENT RISK
+# ============================================================
+
+def get_student_risk(
+    db: Session,
+    student_id: str,
+    subject_id: int | None = None
+):
 
     student = _get_student(db, student_id)
 
@@ -195,9 +384,16 @@ def get_student_risk(db: Session, student_id: str):
             "message": "Student not found."
         }
 
-    records = db.query(StudentRisk).filter(
+    query = db.query(StudentRisk).filter(
         StudentRisk.student_id == student_id
-    ).all()
+    )
+
+    if subject_id is not None:
+        query = query.filter(
+            StudentRisk.subject_id == subject_id
+        )
+
+    records = query.all()
 
     if not records:
         return {
@@ -208,32 +404,55 @@ def get_student_risk(db: Session, student_id: str):
 
     for risk in records:
 
-        subject = db.query(Subject).filter(
-            Subject.id == risk.subject_id
-        ).first()
+        subject = _get_subject(
+            db,
+            risk.subject_id
+        )
 
         result.append({
-            "student_id": student.student_id,
-            "student_name": student.name,
-            "subject_id": risk.subject_id,
-            "subject_name":
-                subject.name if subject else "Unknown",
+            "student_id":
+                student.student_id,
 
-            "risk_score": risk.risk_score,
-            "risk_level": risk.risk_level,
-            "risk_reason": risk.risk_reason
+            "student_name":
+                student.name,
+
+            "subject_id":
+                risk.subject_id,
+
+            "subject_name":
+                subject.name if subject
+                else "Unknown",
+
+            "risk_score":
+                risk.risk_score,
+
+            "risk_level":
+                risk.risk_level,
+
+            "risk_reason":
+                risk.risk_reason
         })
 
     return {
-        "student_id": student.student_id,
-        "student_name": student.name,
-        "risk": result
+        "student_id":
+            student.student_id,
+
+        "student_name":
+            student.name,
+
+        "risk":
+            result
     }
 
 
+# ============================================================
+# STUDENT RECOMMENDATIONS
+# ============================================================
+
 def get_student_recommendations(
     db: Session,
-    student_id: str
+    student_id: str,
+    subject_id: int | None = None
 ):
 
     student = _get_student(db, student_id)
@@ -243,9 +462,16 @@ def get_student_recommendations(
             "message": "Student not found."
         }
 
-    records = db.query(Recommendation).filter(
+    query = db.query(Recommendation).filter(
         Recommendation.student_id == student_id
-    ).order_by(
+    )
+
+    if subject_id is not None:
+        query = query.filter(
+            Recommendation.subject_id == subject_id
+        )
+
+    records = query.order_by(
         Recommendation.created_at.desc()
     ).all()
 
@@ -258,9 +484,10 @@ def get_student_recommendations(
 
     for recommendation in records:
 
-        subject = db.query(Subject).filter(
-            Subject.id == recommendation.subject_id
-        ).first()
+        subject = _get_subject(
+            db,
+            recommendation.subject_id
+        )
 
         result.append({
             "recommendation_id":
@@ -276,7 +503,8 @@ def get_student_recommendations(
                 recommendation.subject_id,
 
             "subject_name":
-                subject.name if subject else "Unknown",
+                subject.name if subject
+                else "Unknown",
 
             "recommendation_text":
                 recommendation.recommendation_text,
@@ -292,15 +520,19 @@ def get_student_recommendations(
         })
 
     return {
-        "student_id": student.student_id,
-        "student_name": student.name,
-        "recommendations": result
+        "student_id":
+            student.student_id,
+
+        "student_name":
+            student.name,
+
+        "recommendations":
+            result
     }
 
 
 # ============================================================
-# COLLEGE SUMMARY FUNCTIONS
-# THESE ARE FOR FACULTY / ADMIN
+# COLLEGE SUMMARY
 # ============================================================
 
 def get_total_students(db: Session):
@@ -323,7 +555,8 @@ def get_low_attendance_students(
 
     if not performances:
         return {
-            "message": "No students found with low attendance."
+            "message":
+                "No students found with low attendance."
         }
 
     result = []
@@ -335,9 +568,10 @@ def get_low_attendance_students(
             performance.student_id
         )
 
-        subject = db.query(Subject).filter(
-            Subject.id == performance.subject_id
-        ).first()
+        subject = _get_subject(
+            db,
+            performance.subject_id
+        )
 
         if student:
 
@@ -357,8 +591,11 @@ def get_low_attendance_students(
             })
 
     return {
-        "threshold": threshold,
-        "students": result
+        "threshold":
+            threshold,
+
+        "students":
+            result
     }
 
 
@@ -370,7 +607,8 @@ def get_high_risk_students(db: Session):
 
     if not risk_records:
         return {
-            "message": "No high-risk students found."
+            "message":
+                "No high-risk students found."
         }
 
     result = []
@@ -382,9 +620,10 @@ def get_high_risk_students(db: Session):
             risk.student_id
         )
 
-        subject = db.query(Subject).filter(
-            Subject.id == risk.subject_id
-        ).first()
+        subject = _get_subject(
+            db,
+            risk.subject_id
+        )
 
         if student:
 
@@ -410,7 +649,8 @@ def get_high_risk_students(db: Session):
             })
 
     return {
-        "students": result
+        "students":
+            result
     }
 
 
@@ -452,7 +692,7 @@ def create_ai_tools(
 ):
 
     # ========================================================
-    # STUDENT TOOLS
+    # STUDENT
     # ========================================================
 
     if current_user.role == "student":
@@ -474,13 +714,6 @@ def create_ai_tools(
         def my_performance():
             """
             Get the current student's academic performance.
-
-            Includes:
-            - Attendance percentage
-            - Marks percentage
-            - Assignment percentage
-            - Overall percentage
-            - Performance level
             """
 
             return get_student_performance(
@@ -495,7 +728,7 @@ def create_ai_tools(
         @tool
         def my_attendance():
             """
-            Get the current student's attendance records.
+            Get the current student's attendance.
             """
 
             return get_student_attendance(
@@ -525,12 +758,7 @@ def create_ai_tools(
         @tool
         def my_risk():
             """
-            Get the current student's academic risk information.
-
-            Includes:
-            - Risk score
-            - Risk level
-            - Risk reason
+            Get the current student's academic risk.
             """
 
             return get_student_risk(
@@ -545,8 +773,7 @@ def create_ai_tools(
         @tool
         def my_recommendations():
             """
-            Get personalized recommendations
-            for the current student.
+            Get the current student's recommendations.
             """
 
             return get_student_recommendations(
@@ -555,8 +782,7 @@ def create_ai_tools(
             )
 
         # ----------------------------------------------------
-        # IMPORTANT:
-        # STUDENT GETS ONLY OWN DATA TOOLS
+        # STUDENT ONLY GETS OWN TOOLS
         # ----------------------------------------------------
 
         return [
@@ -569,37 +795,33 @@ def create_ai_tools(
 
 
     # ========================================================
-    # FACULTY / ADMIN TOOLS
+    # FACULTY / ADMIN
     # ========================================================
 
     elif current_user.role in ["faculty", "admin"]:
 
-        # ----------------------------------------------------
+        # ====================================================
         # TOTAL STUDENTS
-        # ----------------------------------------------------
+        # ====================================================
 
         @tool
         def total_students():
             """
-            Get the total number of registered students
-            in the college database.
+            Get total registered students.
             """
 
             return get_total_students(db)
 
-        # ----------------------------------------------------
-        # LOW ATTENDANCE STUDENTS
-        # ----------------------------------------------------
+        # ====================================================
+        # LOW ATTENDANCE
+        # ====================================================
 
         @tool
         def low_attendance_students(
             threshold: float = 75
         ):
             """
-            Find students whose attendance is below
-            the specified threshold.
-
-            Default threshold is 75 percent.
+            Get students with attendance below threshold.
             """
 
             return get_low_attendance_students(
@@ -607,136 +829,333 @@ def create_ai_tools(
                 threshold
             )
 
-        # ----------------------------------------------------
-        # HIGH RISK STUDENTS
-        # ----------------------------------------------------
+        # ====================================================
+        # HIGH RISK
+        # ====================================================
 
         @tool
         def high_risk_students():
             """
-            Get students who are currently marked
-            as High Risk.
+            Get high-risk students.
             """
 
             return get_high_risk_students(db)
 
-        # ----------------------------------------------------
+        # ====================================================
         # AVERAGE ATTENDANCE
-        # ----------------------------------------------------
+        # ====================================================
 
         @tool
         def average_attendance():
             """
-            Get the average attendance percentage
-            from available performance records.
+            Get average attendance.
             """
 
             return get_average_attendance(db)
 
-        # ----------------------------------------------------
+        # ====================================================
         # STUDENT PERFORMANCE
-        # ----------------------------------------------------
+        # ====================================================
 
         @tool
         def student_performance(
-            student_id: str
+            student_id: str,
+            subject_id: int
         ):
             """
-            Get academic performance of a student.
+            Get a student's performance for a subject.
 
-            Example student ID:
-            STU001
+            Faculty can only access subjects assigned
+            to them.
             """
+
+            if current_user.role == "faculty":
+
+                allowed = faculty_has_subject_access(
+                    db,
+                    current_user.id,
+                    subject_id
+                )
+
+                if not allowed:
+
+                    return {
+                        "error":
+                            "Access denied. This subject is not assigned to you."
+                    }
+
+            student = _get_student(
+                db,
+                student_id
+            )
+
+            if not student:
+
+                return {
+                    "error":
+                        "Student not found."
+                }
+
+            if not student_has_subject(
+                db,
+                student_id,
+                subject_id
+            ):
+
+                return {
+                    "error":
+                        "This student does not have data for the requested subject."
+                }
 
             return get_student_performance(
                 db,
-                student_id
+                student_id,
+                subject_id
             )
 
-        # ----------------------------------------------------
+        # ====================================================
         # STUDENT ATTENDANCE
-        # ----------------------------------------------------
+        # ====================================================
 
         @tool
         def student_attendance(
-            student_id: str
+            student_id: str,
+            subject_id: int
         ):
             """
-            Get attendance records of a student.
+            Get a student's attendance for a subject.
 
-            Example student ID:
-            STU001
+            Faculty can only access subjects assigned
+            to them.
             """
+
+            if current_user.role == "faculty":
+
+                allowed = faculty_has_subject_access(
+                    db,
+                    current_user.id,
+                    subject_id
+                )
+
+                if not allowed:
+
+                    return {
+                        "error":
+                            "Access denied. This subject is not assigned to you."
+                    }
+
+            student = _get_student(
+                db,
+                student_id
+            )
+
+            if not student:
+
+                return {
+                    "error":
+                        "Student not found."
+                }
+
+            if not student_has_subject(
+                db,
+                student_id,
+                subject_id
+            ):
+
+                return {
+                    "error":
+                        "This student does not have data for the requested subject."
+                }
 
             return get_student_attendance(
                 db,
-                student_id
+                student_id,
+                subject_id
             )
 
-        # ----------------------------------------------------
+        # ====================================================
         # STUDENT MARKS
-        # ----------------------------------------------------
+        # ====================================================
 
         @tool
         def student_marks(
-            student_id: str
+            student_id: str,
+            subject_id: int
         ):
             """
-            Get marks of a student.
+            Get a student's marks for a subject.
 
-            Example student ID:
-            STU001
+            Faculty can only access subjects assigned
+            to them.
             """
+
+            if current_user.role == "faculty":
+
+                allowed = faculty_has_subject_access(
+                    db,
+                    current_user.id,
+                    subject_id
+                )
+
+                if not allowed:
+
+                    return {
+                        "error":
+                            "Access denied. This subject is not assigned to you."
+                    }
+
+            student = _get_student(
+                db,
+                student_id
+            )
+
+            if not student:
+
+                return {
+                    "error":
+                        "Student not found."
+                }
+
+            if not student_has_subject(
+                db,
+                student_id,
+                subject_id
+            ):
+
+                return {
+                    "error":
+                        "This student does not have data for the requested subject."
+                }
 
             return get_student_marks(
                 db,
-                student_id
+                student_id,
+                subject_id
             )
 
-        # ----------------------------------------------------
+        # ====================================================
         # STUDENT RISK
-        # ----------------------------------------------------
+        # ====================================================
 
         @tool
         def student_risk(
-            student_id: str
+            student_id: str,
+            subject_id: int
         ):
             """
-            Get academic risk information of a student.
+            Get a student's risk information for a subject.
 
-            Example student ID:
-            STU001
+            Faculty can only access subjects assigned
+            to them.
             """
+
+            if current_user.role == "faculty":
+
+                allowed = faculty_has_subject_access(
+                    db,
+                    current_user.id,
+                    subject_id
+                )
+
+                if not allowed:
+
+                    return {
+                        "error":
+                            "Access denied. This subject is not assigned to you."
+                    }
+
+            student = _get_student(
+                db,
+                student_id
+            )
+
+            if not student:
+
+                return {
+                    "error":
+                        "Student not found."
+                }
+
+            if not student_has_subject(
+                db,
+                student_id,
+                subject_id
+            ):
+
+                return {
+                    "error":
+                        "This student does not have data for the requested subject."
+                }
 
             return get_student_risk(
                 db,
-                student_id
+                student_id,
+                subject_id
             )
 
-        # ----------------------------------------------------
+        # ====================================================
         # STUDENT RECOMMENDATIONS
-        # ----------------------------------------------------
+        # ====================================================
 
         @tool
         def student_recommendations(
-            student_id: str
+            student_id: str,
+            subject_id: int
         ):
             """
-            Get recommendations generated
-            for a student.
+            Get a student's recommendations for a subject.
 
-            Example student ID:
-            STU001
+            Faculty can only access subjects assigned
+            to them.
             """
 
-            return get_student_recommendations(
+            if current_user.role == "faculty":
+
+                allowed = faculty_has_subject_access(
+                    db,
+                    current_user.id,
+                    subject_id
+                )
+
+                if not allowed:
+
+                    return {
+                        "error":
+                            "Access denied. This subject is not assigned to you."
+                    }
+
+            student = _get_student(
                 db,
                 student_id
             )
 
-        # ----------------------------------------------------
-        # FACULTY / ADMIN GETS ALL AUTHORIZED TOOLS
-        # ----------------------------------------------------
+            if not student:
+
+                return {
+                    "error":
+                        "Student not found."
+                }
+
+            if not student_has_subject(
+                db,
+                student_id,
+                subject_id
+            ):
+
+                return {
+                    "error":
+                        "This student does not have data for the requested subject."
+                }
+
+            return get_student_recommendations(
+                db,
+                student_id,
+                subject_id
+            )
+
+        # ====================================================
+        # FACULTY / ADMIN TOOLS
+        # ====================================================
 
         return [
             total_students,
@@ -750,7 +1169,6 @@ def create_ai_tools(
             student_risk,
             student_recommendations
         ]
-
 
     # ========================================================
     # UNKNOWN ROLE
