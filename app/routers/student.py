@@ -46,6 +46,49 @@ def create_student(
     current_faculty: User = Depends(require_faculty)
 ):
 
+
+    
+    # -----------------------------------------
+    # CLEAN INPUT
+    # -----------------------------------------
+
+    student_id = student_id.strip()
+    name = name.strip()
+    email = email.strip().lower()
+
+    if phone:
+        phone = phone.strip()
+
+    # -----------------------------------------
+    # VALIDATION
+    # -----------------------------------------
+
+    if not student_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Student ID cannot be empty"
+        )
+
+    if not name:
+        raise HTTPException(
+            status_code=400,
+            detail="Student name cannot be empty"
+        )
+
+    if not email:
+        raise HTTPException(
+            status_code=400,
+            detail="Email cannot be empty"
+        )
+
+    if not password:
+        raise HTTPException(
+            status_code=400,
+            detail="Password cannot be empty"
+        )
+
+
+
     # ----------------------------------------------
     # CHECK EMAIL
     # ----------------------------------------------
@@ -224,13 +267,16 @@ def get_all_students(
 
 @router.get("/{student_id}")
 def get_student(
-    student_id: int,
+    student_id: str,
     db: Session = Depends(get_db),
     current_faculty: User = Depends(require_faculty)
 ):
 
+    student_id = student_id.strip()
+
+
     student = db.query(Student).filter(
-        Student.id == student_id
+        Student.student_id == student_id
     ).first()
 
     if not student:
@@ -264,8 +310,10 @@ def delete_student(
     current_faculty: User = Depends(require_faculty)
 ):
 
+    student_id = student_id.strip()
+
     student = db.query(Student).filter(
-        Student.id == student_id
+        Student.student_id == student_id
     ).first()
 
     if not student:

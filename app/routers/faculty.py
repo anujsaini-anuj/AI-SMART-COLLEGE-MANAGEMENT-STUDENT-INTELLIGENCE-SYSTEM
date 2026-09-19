@@ -43,6 +43,54 @@ def create_faculty(
     current_admin: User = Depends(require_admin)
 ):
 
+
+
+     # -----------------------------------------
+    # CLEAN INPUT DATA
+    # -----------------------------------------
+
+    faculty_id = faculty_id.strip()
+    name = name.strip()
+    email = email.strip().lower()
+
+    if phone:
+        phone = phone.strip()
+
+    if designation:
+        designation = designation.strip()
+
+
+
+    # -----------------------------------------
+    # BASIC VALIDATION
+    # -----------------------------------------
+
+    if not faculty_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Faculty ID cannot be empty"
+        )
+
+    if not name:
+        raise HTTPException(
+            status_code=400,
+            detail="Faculty name cannot be empty"
+        )
+
+    if not email:
+        raise HTTPException(
+            status_code=400,
+            detail="Email cannot be empty"
+        )
+
+    if not password:
+        raise HTTPException(
+            status_code=400,
+            detail="Password cannot be empty"
+        )
+
+
+
     # ------------------------------------------------
     # CHECK EMAIL
     # ------------------------------------------------
@@ -209,13 +257,16 @@ def get_faculties(
 
 @router.get("/{faculty_id}")
 def get_faculty(
-    faculty_id: int,
+    faculty_id: str,
     db: Session = Depends(get_db),
     current_admin: User = Depends(require_admin)
 ):
 
+    
+    faculty_id = faculty_id.strip()
+
     faculty = db.query(Faculty).filter(
-        Faculty.id == faculty_id
+        Faculty.faculty_id == faculty_id
     ).first()
 
     if not faculty:
@@ -243,13 +294,15 @@ def get_faculty(
 
 @router.delete("/{faculty_id}")
 def delete_faculty(
-    faculty_id: int,
+    faculty_id: str,
     db: Session = Depends(get_db),
     current_admin: User = Depends(require_admin)
 ):
 
+    faculty_id = faculty_id.strip()
+
     faculty = db.query(Faculty).filter(
-        Faculty.id == faculty_id
+        Faculty.faculty_id  == faculty_id
     ).first()
 
     if not faculty:
