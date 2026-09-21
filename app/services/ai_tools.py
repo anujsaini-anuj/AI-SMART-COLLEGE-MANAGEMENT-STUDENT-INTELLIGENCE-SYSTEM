@@ -19,18 +19,66 @@ from langchain_core.tools import tool
 # HELPER FUNCTIONS
 # ============================================================
 
-def _get_student(db: Session, student_id: str):
+def _get_student(
+    db: Session,
+    student_id: str
+):
+    student_id = student_id.strip()
 
     return db.query(Student).filter(
         Student.student_id == student_id
     ).first()
 
 
-def _get_subject(db: Session, subject_id: int):
-
+def _get_subject(
+    db: Session,
+    subject_id: int
+):
     return db.query(Subject).filter(
         Subject.id == subject_id
     ).first()
+
+
+# ============================================================
+# SUBJECT LOOKUP
+# ============================================================
+
+def find_subject_by_name(
+    db: Session,
+    subject_name: str
+):
+    """
+    Find a subject using subject name or subject code.
+    """
+
+    subject_name = subject_name.strip()
+
+    if not subject_name:
+        return {
+            "error": "Subject name cannot be empty."
+        }
+
+    # First search by subject name
+    subject = db.query(Subject).filter(
+        Subject.name.ilike(subject_name)
+    ).first()
+
+    # If not found, search by subject code
+    if not subject:
+        subject = db.query(Subject).filter(
+            Subject.code.ilike(subject_name)
+        ).first()
+
+    if not subject:
+        return {
+            "error": "Subject not found."
+        }
+
+    return {
+        "subject_id": subject.id,
+        "subject_name": subject.name,
+        "subject_code": subject.code
+    }
 
 
 # ============================================================
@@ -131,7 +179,10 @@ def get_student_performance(
     subject_id: int | None = None
 ):
 
-    student = _get_student(db, student_id)
+    student = _get_student(
+        db,
+        student_id
+    )
 
     if not student:
         return {
@@ -215,7 +266,10 @@ def get_student_attendance(
     subject_id: int | None = None
 ):
 
-    student = _get_student(db, student_id)
+    student = _get_student(
+        db,
+        student_id
+    )
 
     if not student:
         return {
@@ -292,7 +346,10 @@ def get_student_marks(
     subject_id: int | None = None
 ):
 
-    student = _get_student(db, student_id)
+    student = _get_student(
+        db,
+        student_id
+    )
 
     if not student:
         return {
@@ -377,7 +434,10 @@ def get_student_risk(
     subject_id: int | None = None
 ):
 
-    student = _get_student(db, student_id)
+    student = _get_student(
+        db,
+        student_id
+    )
 
     if not student:
         return {
@@ -455,7 +515,10 @@ def get_student_recommendations(
     subject_id: int | None = None
 ):
 
-    student = _get_student(db, student_id)
+    student = _get_student(
+        db,
+        student_id
+    )
 
     if not student:
         return {
@@ -535,7 +598,9 @@ def get_student_recommendations(
 # COLLEGE SUMMARY
 # ============================================================
 
-def get_total_students(db: Session):
+def get_total_students(
+    db: Session
+):
 
     total = db.query(Student).count()
 
@@ -599,7 +664,9 @@ def get_low_attendance_students(
     }
 
 
-def get_high_risk_students(db: Session):
+def get_high_risk_students(
+    db: Session
+):
 
     risk_records = db.query(StudentRisk).filter(
         StudentRisk.risk_level == "High"
@@ -654,7 +721,9 @@ def get_high_risk_students(db: Session):
     }
 
 
-def get_average_attendance(db: Session):
+def get_average_attendance(
+    db: Session
+):
 
     performances = db.query(
         Performance
@@ -793,12 +862,31 @@ def create_ai_tools(
             my_recommendations
         ]
 
-
     # ========================================================
     # FACULTY / ADMIN
     # ========================================================
 
     elif current_user.role in ["faculty", "admin"]:
+
+        # ====================================================
+        # SUBJECT LOOKUP
+        # ====================================================
+
+        @tool
+        def find_subject(
+            subject_name: str
+        ):
+            """
+            Find a subject using its name or subject code.
+
+            Use this tool when the user mentions a subject
+            by name or code instead of subject ID.
+            """
+
+            return find_subject_by_name(
+                db,
+                subject_name
+            )
 
         # ====================================================
         # TOTAL STUDENTS
@@ -869,6 +957,8 @@ def create_ai_tools(
             to them.
             """
 
+            student_id = student_id.strip()
+
             if current_user.role == "faculty":
 
                 allowed = faculty_has_subject_access(
@@ -878,7 +968,6 @@ def create_ai_tools(
                 )
 
                 if not allowed:
-
                     return {
                         "error":
                             "Access denied. This subject is not assigned to you."
@@ -890,7 +979,6 @@ def create_ai_tools(
             )
 
             if not student:
-
                 return {
                     "error":
                         "Student not found."
@@ -901,7 +989,6 @@ def create_ai_tools(
                 student_id,
                 subject_id
             ):
-
                 return {
                     "error":
                         "This student does not have data for the requested subject."
@@ -929,6 +1016,8 @@ def create_ai_tools(
             to them.
             """
 
+            student_id = student_id.strip()
+
             if current_user.role == "faculty":
 
                 allowed = faculty_has_subject_access(
@@ -938,7 +1027,6 @@ def create_ai_tools(
                 )
 
                 if not allowed:
-
                     return {
                         "error":
                             "Access denied. This subject is not assigned to you."
@@ -950,7 +1038,6 @@ def create_ai_tools(
             )
 
             if not student:
-
                 return {
                     "error":
                         "Student not found."
@@ -961,7 +1048,6 @@ def create_ai_tools(
                 student_id,
                 subject_id
             ):
-
                 return {
                     "error":
                         "This student does not have data for the requested subject."
@@ -989,6 +1075,8 @@ def create_ai_tools(
             to them.
             """
 
+            student_id = student_id.strip()
+
             if current_user.role == "faculty":
 
                 allowed = faculty_has_subject_access(
@@ -998,7 +1086,6 @@ def create_ai_tools(
                 )
 
                 if not allowed:
-
                     return {
                         "error":
                             "Access denied. This subject is not assigned to you."
@@ -1010,7 +1097,6 @@ def create_ai_tools(
             )
 
             if not student:
-
                 return {
                     "error":
                         "Student not found."
@@ -1021,7 +1107,6 @@ def create_ai_tools(
                 student_id,
                 subject_id
             ):
-
                 return {
                     "error":
                         "This student does not have data for the requested subject."
@@ -1049,6 +1134,8 @@ def create_ai_tools(
             to them.
             """
 
+            student_id = student_id.strip()
+
             if current_user.role == "faculty":
 
                 allowed = faculty_has_subject_access(
@@ -1058,7 +1145,6 @@ def create_ai_tools(
                 )
 
                 if not allowed:
-
                     return {
                         "error":
                             "Access denied. This subject is not assigned to you."
@@ -1070,7 +1156,6 @@ def create_ai_tools(
             )
 
             if not student:
-
                 return {
                     "error":
                         "Student not found."
@@ -1081,7 +1166,6 @@ def create_ai_tools(
                 student_id,
                 subject_id
             ):
-
                 return {
                     "error":
                         "This student does not have data for the requested subject."
@@ -1109,6 +1193,8 @@ def create_ai_tools(
             to them.
             """
 
+            student_id = student_id.strip()
+
             if current_user.role == "faculty":
 
                 allowed = faculty_has_subject_access(
@@ -1118,7 +1204,6 @@ def create_ai_tools(
                 )
 
                 if not allowed:
-
                     return {
                         "error":
                             "Access denied. This subject is not assigned to you."
@@ -1130,7 +1215,6 @@ def create_ai_tools(
             )
 
             if not student:
-
                 return {
                     "error":
                         "Student not found."
@@ -1141,7 +1225,6 @@ def create_ai_tools(
                 student_id,
                 subject_id
             ):
-
                 return {
                     "error":
                         "This student does not have data for the requested subject."
@@ -1158,6 +1241,8 @@ def create_ai_tools(
         # ====================================================
 
         return [
+            find_subject,
+
             total_students,
             low_attendance_students,
             high_risk_students,
