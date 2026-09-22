@@ -4,7 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
-from app.database.models import Attendance, Student, Subject
+from app.database.models import (
+    Attendance,
+    Student,
+    Subject,
+    FacultySubject
+)
 from app.utils.auth import require_faculty, require_student
 
 
@@ -27,12 +32,33 @@ def mark_attendance(
     db: Session = Depends(get_db),
     current_user=Depends(require_faculty)
 ):
+    # Clean input values
+    student_id = student_id.strip()
+    status = status.strip()
+
 
     # Validate status
     if status not in ["Present", "Absent"]:
         raise HTTPException(
             status_code=400,
             detail="Status must be Present or Absent"
+        )
+
+    # --------------------------------------------------
+    # Get faculty profile
+    # --------------------------------------------------
+
+    faculty = db.query(FacultySubject).filter(
+        FacultySubject.faculty.has(
+            user_id=current_user.id
+        ),
+        FacultySubject.subject_id == subject_id
+    ).first()
+
+    if not faculty:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not assigned to this subject"
         )
 
     # Check student
@@ -109,7 +135,7 @@ def mark_attendance(
 
 
 # ==================================================
-# FACULTY - VIEW ALL ATTENDANCE
+# FACULTY - VIEW ATTENDANCE
 # ==================================================
 
 @router.get("/")
@@ -118,7 +144,32 @@ def get_all_attendance(
     current_user=Depends(require_faculty)
 ):
 
-    attendance_records = db.query(Attendance).all()
+    # Get subjects assigned to current faculty
+    assigned_subject_ids = db.query(
+        FacultySubject.subject_id
+    ).join(
+        FacultySubject.faculty
+    ).filter(
+        FacultySubject.faculty.has(
+            user_id=current_user.id
+        )
+    ).all()
+
+    assigned_subject_ids = [
+        subject_id[0]
+        for subject_id in assigned_subject_ids
+    ]
+
+    if not assigned_subject_ids:
+        return {
+            "total_records": 0,
+            "attendance": []
+        }
+
+    # Get only attendance of assigned subjects
+    attendance_records = db.query(Attendance).filter(
+        Attendance.subject_id.in_(assigned_subject_ids)
+    ).all()
 
     result = []
 

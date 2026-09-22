@@ -2,14 +2,29 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
+
 from app.database.models import (
     Student,
     Subject,
     Performance,
-    Prediction
+    Prediction,
+    StudentMLRecord,
+    Faculty,
+    FacultySubject
 )
-from app.services.prediction_service import predict_performance
-from app.utils.auth import require_faculty, require_student
+
+from app.services.prediction_service import (
+    predict_performance,
+    train_prediction_model,
+    train_future_prediction_model,
+    predict_future_student_performance
+)
+
+from app.utils.auth import (
+    require_faculty,
+    require_student,
+    require_admin
+)
 
 
 router = APIRouter(
@@ -17,6 +32,79 @@ router = APIRouter(
     tags=["Student Performance Prediction"]
 )
 
+
+# ============================================================
+# TRAIN OLD ML MODEL
+# ADMIN ONLY
+# ============================================================
+
+@router.post("/train-model")
+def train_model(
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_admin)
+):
+
+    try:
+        result = train_prediction_model(db)
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+    return {
+        "message": "ML model trained and saved successfully",
+
+        "model": {
+            "model_name": result["model_name"],
+            "features": result["features"],
+            "training_samples": result["training_samples"],
+            "evaluation": result["metrics"],
+            "trained_at": result["trained_at"]
+        }
+    }
+
+
+# ============================================================
+# TRAIN FUTURE ML MODEL
+# ADMIN ONLY
+# ============================================================
+
+@router.post("/train-future-model")
+def train_future_model(
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_admin)
+):
+
+    try:
+        result = train_future_prediction_model(db)
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+    return {
+        "message": "Future performance ML model trained and saved successfully",
+
+        "model": {
+            "model_name": result["model_name"],
+            "prediction_type": result["prediction_type"],
+            "features": result["features"],
+            "target": result["target"],
+            "training_samples": result["training_samples"],
+            "evaluation": result["metrics"],
+            "trained_at": result["trained_at"]
+        }
+    }
+
+
+# ============================================================
+# CALCULATE CURRENT PERFORMANCE PREDICTION
+# FACULTY ONLY
+# ============================================================
 
 @router.post("/calculate")
 def calculate_prediction(
@@ -26,9 +114,29 @@ def calculate_prediction(
     current_faculty=Depends(require_faculty)
 ):
 
-    # -------------------------
+    # --------------------------------------------------------
+    # Clean Student ID
+    # --------------------------------------------------------
+
+    student_id = student_id.strip()
+
+    # --------------------------------------------------------
+    # Find Faculty Profile
+    # --------------------------------------------------------
+
+    faculty = db.query(Faculty).filter(
+        Faculty.user_id == current_faculty.id
+    ).first()
+
+    if not faculty:
+        raise HTTPException(
+            status_code=404,
+            detail="Faculty profile not found"
+        )
+
+    # --------------------------------------------------------
     # Check Student
-    # -------------------------
+    # --------------------------------------------------------
 
     student = db.query(Student).filter(
         Student.student_id == student_id
@@ -40,10 +148,9 @@ def calculate_prediction(
             detail="Student not found"
         )
 
-
-    # -------------------------
+    # --------------------------------------------------------
     # Check Subject
-    # -------------------------
+    # --------------------------------------------------------
 
     subject = db.query(Subject).filter(
         Subject.id == subject_id
@@ -55,10 +162,25 @@ def calculate_prediction(
             detail="Subject not found"
         )
 
+    # --------------------------------------------------------
+    # SECURITY CHECK
+    # Faculty must be assigned to this subject
+    # --------------------------------------------------------
 
-    # -------------------------
+    faculty_subject = db.query(FacultySubject).filter(
+        FacultySubject.faculty_id == faculty.id,
+        FacultySubject.subject_id == subject_id
+    ).first()
+
+    if not faculty_subject:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not assigned to this subject"
+        )
+
+    # --------------------------------------------------------
     # Get Performance
-    # -------------------------
+    # --------------------------------------------------------
 
     performance = db.query(Performance).filter(
         Performance.student_id == student_id,
@@ -71,21 +193,29 @@ def calculate_prediction(
             detail="Performance not calculated yet"
         )
 
-
-    # -------------------------
+    # --------------------------------------------------------
     # ML Prediction
-    # -------------------------
+    # --------------------------------------------------------
 
-    predicted_performance = predict_performance(
-        performance.attendance_percentage,
-        performance.marks_percentage,
-        performance.assignment_percentage
-    )
+    try:
 
+        predicted_performance, metrics = predict_performance(
+            db,
+            performance.attendance_percentage,
+            performance.marks_percentage,
+            performance.assignment_percentage
+        )
 
-    # -------------------------
+    except ValueError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+    # --------------------------------------------------------
     # Prediction Level
-    # -------------------------
+    # --------------------------------------------------------
 
     if predicted_performance >= 80:
         predicted_level = "Excellent"
@@ -99,20 +229,19 @@ def calculate_prediction(
     else:
         predicted_level = "Poor"
 
-
-    # -------------------------
-    # Check Existing Prediction
-    # -------------------------
+    # --------------------------------------------------------
+    # Check Existing Current Prediction
+    # --------------------------------------------------------
 
     existing_prediction = db.query(Prediction).filter(
         Prediction.student_id == student_id,
-        Prediction.subject_id == subject_id
+        Prediction.subject_id == subject_id,
+        Prediction.prediction_type == "Current Performance"
     ).first()
 
-
-    # -------------------------
-    # Update Existing
-    # -------------------------
+    # --------------------------------------------------------
+    # Update Existing Prediction
+    # --------------------------------------------------------
 
     if existing_prediction:
 
@@ -130,10 +259,9 @@ def calculate_prediction(
 
         prediction = existing_prediction
 
-
-    # -------------------------
+    # --------------------------------------------------------
     # Create New Prediction
-    # -------------------------
+    # --------------------------------------------------------
 
     else:
 
@@ -142,115 +270,458 @@ def calculate_prediction(
             subject_id=subject_id,
             predicted_performance=predicted_performance,
             predicted_level=predicted_level,
-            model_name="Random Forest Regressor"
+            model_name="Random Forest Regressor",
+            prediction_type="Current Performance"
         )
 
         db.add(prediction)
 
+    # --------------------------------------------------------
+    # Save
+    # --------------------------------------------------------
 
-    # -------------------------
-    # Save Database
-    # -------------------------
+    try:
 
-    db.commit()
-    db.refresh(prediction)
+        db.commit()
+        db.refresh(prediction)
 
+    except Exception:
 
-    # -------------------------
+        db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to save prediction."
+        )
+
+    # --------------------------------------------------------
     # Response
-    # -------------------------
+    # --------------------------------------------------------
 
     return {
-        "message": "Performance prediction saved successfully",
 
-        "prediction_id": prediction.id,
+        "message":
+            "Performance prediction saved successfully",
 
-        "student_id": student.student_id,
-        "student_name": student.name,
+        "prediction_id":
+            prediction.id,
 
-        "subject_id": subject.id,
-        "subject_name": subject.name,
+        "student_id":
+            student.student_id,
 
-        "attendance_percentage":
-            performance.attendance_percentage,
+        "student_name":
+            student.name,
 
-        "marks_percentage":
-            performance.marks_percentage,
+        "subject_id":
+            subject.id,
 
-        "assignment_percentage":
-            performance.assignment_percentage,
+        "subject_name":
+            subject.name,
 
-        "predicted_performance":
-            prediction.predicted_performance,
+        "input_data": {
 
-        "predicted_level":
-            prediction.predicted_level,
+            "attendance_percentage":
+                performance.attendance_percentage,
 
-        "model_name":
-            prediction.model_name
-    }
+            "marks_percentage":
+                performance.marks_percentage,
 
+            "assignment_percentage":
+                performance.assignment_percentage
+        },
 
-
-
-@router.get("/")
-def get_all_predictions(
-    db: Session = Depends(get_db),
-    current_faculty=Depends(require_faculty)
-):
-    predictions = db.query(Prediction).all()
-
-    result = []
-
-    for prediction in predictions:
-
-        result.append({
-            "prediction_id": prediction.id,
-
-            "student_id": prediction.student.student_id,
-            "student_name": prediction.student.name,
-
-            "subject_id": prediction.subject.id,
-            "subject_name": prediction.subject.name,
+        "prediction": {
 
             "predicted_performance":
                 prediction.predicted_performance,
 
             "predicted_level":
-                prediction.predicted_level,
+                prediction.predicted_level
+        },
+
+        "model": {
 
             "model_name":
                 prediction.model_name,
 
-            "created_at":
-                prediction.created_at
-        })
+            "evaluation": {
 
-    return {
-        "total_predictions": len(result),
-        "predictions": result
+                "mae":
+                    metrics["mae"],
+
+                "rmse":
+                    metrics["rmse"],
+
+                "r2_score":
+                    metrics["r2_score"]
+            }
+        }
     }
 
 
+# ============================================================
+# FUTURE PERFORMANCE PREDICTION
+# FACULTY ONLY
+# ============================================================
 
-
-@router.get("/my-prediction")
-def get_my_prediction(
+@router.post("/future-performance")
+def future_performance_prediction(
+    student_id: str,
+    subject_id: int,
+    attendance_percentage: int,
+    internal_marks_percentage: int,
+    assignment_percentage: int,
+    previous_exam_percentage: int,
+    academic_trend: int,
     db: Session = Depends(get_db),
-    current_student=Depends(require_student)
+    current_faculty=Depends(require_faculty)
 ):
+
+    # --------------------------------------------------------
+    # Clean Student ID
+    # --------------------------------------------------------
+
+    student_id = student_id.strip()
+
+    # --------------------------------------------------------
+    # Find Faculty Profile
+    # --------------------------------------------------------
+
+    faculty = db.query(Faculty).filter(
+        Faculty.user_id == current_faculty.id
+    ).first()
+
+    if not faculty:
+        raise HTTPException(
+            status_code=404,
+            detail="Faculty profile not found"
+        )
+
+    # --------------------------------------------------------
+    # Validate Student
+    # --------------------------------------------------------
+
     student = db.query(Student).filter(
-        Student.user_id == current_student.id
+        Student.student_id == student_id
     ).first()
 
     if not student:
         raise HTTPException(
             status_code=404,
-            detail="Student profile not found"
+            detail="Student not found"
         )
 
+    # --------------------------------------------------------
+    # Validate Subject
+    # --------------------------------------------------------
+
+    subject = db.query(Subject).filter(
+        Subject.id == subject_id
+    ).first()
+
+    if not subject:
+        raise HTTPException(
+            status_code=404,
+            detail="Subject not found"
+        )
+
+    # --------------------------------------------------------
+    # SECURITY CHECK
+    # Faculty must be assigned to this subject
+    # --------------------------------------------------------
+
+    faculty_subject = db.query(FacultySubject).filter(
+        FacultySubject.faculty_id == faculty.id,
+        FacultySubject.subject_id == subject_id
+    ).first()
+
+    if not faculty_subject:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not assigned to this subject"
+        )
+
+    # --------------------------------------------------------
+    # Validate Percentages
+    # --------------------------------------------------------
+
+    percentage_values = {
+        "attendance_percentage": attendance_percentage,
+        "internal_marks_percentage": internal_marks_percentage,
+        "assignment_percentage": assignment_percentage,
+        "previous_exam_percentage": previous_exam_percentage
+    }
+
+    for field_name, value in percentage_values.items():
+
+        if value < 0 or value > 100:
+
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} must be between 0 and 100."
+            )
+
+    # --------------------------------------------------------
+    # Validate Academic Trend
+    # --------------------------------------------------------
+
+    if academic_trend < -100 or academic_trend > 100:
+
+        raise HTTPException(
+            status_code=400,
+            detail="academic_trend must be between -100 and 100."
+        )
+
+    # --------------------------------------------------------
+    # Future Prediction
+    # --------------------------------------------------------
+
+    try:
+
+        prediction, model_info = (
+            predict_future_student_performance(
+                db=db,
+                attendance_percentage=attendance_percentage,
+                internal_marks_percentage=internal_marks_percentage,
+                assignment_percentage=assignment_percentage,
+                previous_exam_percentage=previous_exam_percentage,
+                academic_trend=academic_trend
+            )
+        )
+
+    except ValueError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+    # --------------------------------------------------------
+    # Prediction Level
+    # --------------------------------------------------------
+
+    if prediction >= 80:
+        predicted_level = "Excellent"
+
+    elif prediction >= 60:
+        predicted_level = "Good"
+
+    elif prediction >= 40:
+        predicted_level = "Average"
+
+    else:
+        predicted_level = "Poor"
+
+    # --------------------------------------------------------
+    # Check Existing Future Prediction
+    # --------------------------------------------------------
+
+    existing_prediction = db.query(Prediction).filter(
+        Prediction.student_id == student_id,
+        Prediction.subject_id == subject_id,
+        Prediction.prediction_type == "Future Final Exam Performance"
+    ).first()
+
+    # --------------------------------------------------------
+    # Update Existing
+    # --------------------------------------------------------
+
+    if existing_prediction:
+
+        existing_prediction.predicted_performance = prediction
+
+        existing_prediction.predicted_level = predicted_level
+
+        existing_prediction.model_name = (
+            model_info["model_name"]
+        )
+
+        prediction_record = existing_prediction
+
+    # --------------------------------------------------------
+    # Create New
+    # --------------------------------------------------------
+
+    else:
+
+        prediction_record = Prediction(
+            student_id=student_id,
+            subject_id=subject_id,
+            predicted_performance=prediction,
+            predicted_level=predicted_level,
+            model_name=model_info["model_name"],
+            prediction_type="Future Final Exam Performance"
+        )
+
+        db.add(prediction_record)
+
+    # --------------------------------------------------------
+    # Save Database
+    # --------------------------------------------------------
+
+    try:
+
+        db.commit()
+        db.refresh(prediction_record)
+
+    except Exception:
+
+        db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to save prediction."
+        )
+
+    # --------------------------------------------------------
+    # Response
+    # --------------------------------------------------------
+
+    return {
+
+        "message":
+            "Future performance predicted and saved successfully",
+
+        "prediction_id":
+            prediction_record.id,
+
+        "student": {
+
+            "student_id":
+                student.student_id,
+
+            "student_name":
+                student.name
+        },
+
+        "subject": {
+
+            "subject_id":
+                subject.id,
+
+            "subject_name":
+                subject.name,
+
+            "subject_code":
+                subject.code
+        },
+
+        "input_data": {
+
+            "attendance_percentage":
+                attendance_percentage,
+
+            "internal_marks_percentage":
+                internal_marks_percentage,
+
+            "assignment_percentage":
+                assignment_percentage,
+
+            "previous_exam_percentage":
+                previous_exam_percentage,
+
+            "academic_trend":
+                academic_trend
+        },
+
+        "prediction": {
+
+            "predicted_final_exam_percentage":
+                prediction,
+
+            "predicted_level":
+                predicted_level
+        },
+
+        "model": {
+
+            "model_name":
+                model_info["model_name"],
+
+            "prediction_type":
+                model_info["prediction_type"],
+
+            "training_samples":
+                model_info["training_samples"],
+
+            "evaluation":
+                model_info["metrics"]
+        }
+    }
+
+
+# ============================================================
+# GET ALL PREDICTIONS
+# FACULTY ONLY
+# ONLY ASSIGNED SUBJECTS
+# ============================================================
+
+@router.get("/")
+def get_predictions(
+    db: Session = Depends(get_db),
+    current_faculty=Depends(require_faculty)
+):
+
+    # --------------------------------------------------------
+    # Find Faculty Profile
+    # --------------------------------------------------------
+
+    faculty = db.query(Faculty).filter(
+        Faculty.user_id == current_faculty.id
+    ).first()
+
+    if not faculty:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Faculty profile not found."
+        )
+
+    # --------------------------------------------------------
+    # Get Assigned Subjects
+    # --------------------------------------------------------
+
+    faculty_subjects = db.query(FacultySubject).filter(
+        FacultySubject.faculty_id == faculty.id
+    ).all()
+
+    subject_ids = [
+        item.subject_id
+        for item in faculty_subjects
+    ]
+
+    # --------------------------------------------------------
+    # No Assigned Subjects
+    # --------------------------------------------------------
+
+    if not subject_ids:
+
+        return {
+
+            "faculty": {
+
+                "faculty_id":
+                    faculty.faculty_id,
+
+                "faculty_name":
+                    faculty.name
+            },
+
+            "assigned_subjects": 0,
+
+            "total_predictions": 0,
+
+            "predictions": []
+        }
+
+    # --------------------------------------------------------
+    # Get Only Assigned Subject Predictions
+    # --------------------------------------------------------
+
     predictions = db.query(Prediction).filter(
-        Prediction.student_id == student.student_id
+        Prediction.subject_id.in_(subject_ids)
+    ).order_by(
+        Prediction.created_at.desc()
     ).all()
 
     result = []
@@ -258,19 +729,42 @@ def get_my_prediction(
     for prediction in predictions:
 
         result.append({
-            "prediction_id": prediction.id,
 
-            "student_id": student.student_id,
-            "student_name": student.name,
+            "prediction_id":
+                prediction.id,
 
-            "subject_id": prediction.subject.id,
-            "subject_name": prediction.subject.name,
+            "student": {
 
-            "predicted_performance":
-                prediction.predicted_performance,
+                "student_id":
+                    prediction.student.student_id,
 
-            "predicted_level":
-                prediction.predicted_level,
+                "student_name":
+                    prediction.student.name
+            },
+
+            "subject": {
+
+                "subject_id":
+                    prediction.subject.id,
+
+                "subject_name":
+                    prediction.subject.name,
+
+                "subject_code":
+                    prediction.subject.code
+            },
+
+            "prediction_type":
+                prediction.prediction_type,
+
+            "prediction": {
+
+                "predicted_performance":
+                    prediction.predicted_performance,
+
+                "predicted_level":
+                    prediction.predicted_level
+            },
 
             "model_name":
                 prediction.model_name,
@@ -280,8 +774,391 @@ def get_my_prediction(
         })
 
     return {
-        "student_id": student.student_id,
-        "student_name": student.name,
-        "total_predictions": len(result),
-        "predictions": result
+
+        "faculty": {
+
+            "faculty_id":
+                faculty.faculty_id,
+
+            "faculty_name":
+                faculty.name
+        },
+
+        "assigned_subjects":
+            len(subject_ids),
+
+        "total_predictions":
+            len(result),
+
+        "predictions":
+            result
+    }
+
+
+# ============================================================
+# MY PREDICTION
+# STUDENT ONLY
+# ONLY OWN PREDICTIONS
+# ============================================================
+
+@router.get("/my-prediction")
+def get_my_predictions(
+    db: Session = Depends(get_db),
+    current_student=Depends(require_student)
+):
+
+    # --------------------------------------------------------
+    # Find Student Profile
+    # --------------------------------------------------------
+
+    student = db.query(Student).filter(
+        Student.user_id == current_student.id
+    ).first()
+
+    if not student:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Student profile not found."
+        )
+
+    # --------------------------------------------------------
+    # Get Only Current Student Predictions
+    # --------------------------------------------------------
+
+    predictions = db.query(Prediction).filter(
+        Prediction.student_id == student.student_id
+    ).order_by(
+        Prediction.created_at.desc()
+    ).all()
+
+    result = []
+
+    for prediction in predictions:
+
+        result.append({
+
+            "prediction_id":
+                prediction.id,
+
+            "subject": {
+
+                "subject_id":
+                    prediction.subject.id,
+
+                "subject_name":
+                    prediction.subject.name,
+
+                "subject_code":
+                    prediction.subject.code
+            },
+
+            "prediction_type":
+                prediction.prediction_type,
+
+            "prediction": {
+
+                "predicted_performance":
+                    prediction.predicted_performance,
+
+                "predicted_level":
+                    prediction.predicted_level
+            },
+
+            "model_name":
+                prediction.model_name,
+
+            "created_at":
+                prediction.created_at
+        })
+
+    return {
+
+        "student": {
+
+            "student_id":
+                student.student_id,
+
+            "student_name":
+                student.name
+        },
+
+        "total_predictions":
+            len(result),
+
+        "predictions":
+            result
+    }
+
+
+# ============================================================
+# CREATE ML TRAINING RECORD
+# ADMIN ONLY
+# ============================================================
+
+@router.post("/ml-record")
+def create_ml_record(
+    student_id: str,
+    subject_id: int,
+    attendance_percentage: int,
+    internal_marks_percentage: int,
+    assignment_percentage: int,
+    previous_exam_percentage: int,
+    academic_trend: int,
+    final_exam_percentage: int,
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_admin)
+):
+
+    # --------------------------------------------------------
+    # Clean Input
+    # --------------------------------------------------------
+
+    student_id = student_id.strip()
+
+    # --------------------------------------------------------
+    # Validate Student
+    # --------------------------------------------------------
+
+    student = db.query(Student).filter(
+        Student.student_id == student_id
+    ).first()
+
+    if not student:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Student not found"
+        )
+
+    # --------------------------------------------------------
+    # Validate Subject
+    # --------------------------------------------------------
+
+    subject = db.query(Subject).filter(
+        Subject.id == subject_id
+    ).first()
+
+    if not subject:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Subject not found"
+        )
+
+    # --------------------------------------------------------
+    # Validate Percentages
+    # --------------------------------------------------------
+
+    percentage_values = {
+
+        "attendance_percentage":
+            attendance_percentage,
+
+        "internal_marks_percentage":
+            internal_marks_percentage,
+
+        "assignment_percentage":
+            assignment_percentage,
+
+        "previous_exam_percentage":
+            previous_exam_percentage,
+
+        "final_exam_percentage":
+            final_exam_percentage
+    }
+
+    for field, value in percentage_values.items():
+
+        if value < 0 or value > 100:
+
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field} must be between 0 and 100"
+            )
+
+    # --------------------------------------------------------
+    # Validate Academic Trend
+    # --------------------------------------------------------
+
+    if academic_trend < -100 or academic_trend > 100:
+
+        raise HTTPException(
+            status_code=400,
+            detail="academic_trend must be between -100 and 100"
+        )
+
+    # --------------------------------------------------------
+    # Create ML Record
+    # --------------------------------------------------------
+
+    ml_record = StudentMLRecord(
+
+        student_id=student_id,
+
+        subject_id=subject_id,
+
+        attendance_percentage=
+            attendance_percentage,
+
+        internal_marks_percentage=
+            internal_marks_percentage,
+
+        assignment_percentage=
+            assignment_percentage,
+
+        previous_exam_percentage=
+            previous_exam_percentage,
+
+        academic_trend=
+            academic_trend,
+
+        final_exam_percentage=
+            final_exam_percentage
+    )
+
+    db.add(ml_record)
+
+    # --------------------------------------------------------
+    # Save
+    # --------------------------------------------------------
+
+    try:
+
+        db.commit()
+
+    except Exception:
+
+        db.rollback()
+
+        raise HTTPException(
+            status_code=400,
+            detail="ML record already exists or invalid data."
+        )
+
+    db.refresh(ml_record)
+
+    # --------------------------------------------------------
+    # Response
+    # --------------------------------------------------------
+
+    return {
+
+        "message":
+            "ML training record added successfully",
+
+        "ml_record_id":
+            ml_record.id,
+
+        "student_id":
+            student.student_id,
+
+        "student_name":
+            student.name,
+
+        "subject_id":
+            subject.id,
+
+        "subject_name":
+            subject.name,
+
+        "features": {
+
+            "attendance_percentage":
+                ml_record.attendance_percentage,
+
+            "internal_marks_percentage":
+                ml_record.internal_marks_percentage,
+
+            "assignment_percentage":
+                ml_record.assignment_percentage,
+
+            "previous_exam_percentage":
+                ml_record.previous_exam_percentage,
+
+            "academic_trend":
+                ml_record.academic_trend
+        },
+
+        "target": {
+
+            "final_exam_percentage":
+                ml_record.final_exam_percentage
+        }
+    }
+
+
+# ============================================================
+# GET ML TRAINING RECORDS
+# ADMIN ONLY
+# ============================================================
+
+@router.get("/ml-records")
+def get_ml_records(
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_admin)
+):
+
+    records = db.query(
+        StudentMLRecord
+    ).order_by(
+        StudentMLRecord.created_at.desc()
+    ).all()
+
+    result = []
+
+    for record in records:
+
+        result.append({
+
+            "ml_record_id":
+                record.id,
+
+            "student_id":
+                record.student.student_id,
+
+            "student_name":
+                record.student.name,
+
+            "subject_id":
+                record.subject.id,
+
+            "subject_name":
+                record.subject.name,
+
+            "features": {
+
+                "attendance_percentage":
+                    record.attendance_percentage,
+
+                "internal_marks_percentage":
+                    record.internal_marks_percentage,
+
+                "assignment_percentage":
+                    record.assignment_percentage,
+
+                "previous_exam_percentage":
+                    record.previous_exam_percentage,
+
+                "academic_trend":
+                    record.academic_trend
+            },
+
+            "target": {
+
+                "final_exam_percentage":
+                    record.final_exam_percentage
+            },
+
+            "created_at":
+                record.created_at
+        })
+
+    return {
+
+        "total_records":
+            len(result),
+
+        "records":
+            result
     }

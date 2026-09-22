@@ -4,7 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
-from app.database.models import Marks, Student, Subject
+from app.database.models import (
+    Marks,
+    Student,
+    Subject,
+    FacultySubject
+)
 from app.utils.auth import require_faculty, require_student
 
 
@@ -30,6 +35,24 @@ def add_marks(
     db: Session = Depends(get_db),
     current_faculty=Depends(require_faculty)
 ):
+
+    # ------------------------------------------------
+    # CHECK FACULTY SUBJECT AUTHORIZATION
+    # ------------------------------------------------
+
+    faculty_subject = db.query(FacultySubject).filter(
+        FacultySubject.subject_id == subject_id,
+        FacultySubject.faculty.has(
+            user_id=current_faculty.id
+        )
+    ).first()
+
+    if not faculty_subject:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not assigned to this subject"
+        )
+
 
     # ------------------------------------------------
     # CHECK STUDENT
@@ -82,7 +105,6 @@ def add_marks(
             detail="Marks cannot be negative"
         )
 
-
     if marks_obtained > max_marks:
         raise HTTPException(
             status_code=400,
@@ -123,12 +145,10 @@ def add_marks(
     db.add(marks)
 
     try:
-
         db.commit()
         db.refresh(marks)
 
     except Exception:
-
         db.rollback()
 
         raise HTTPException(
@@ -156,7 +176,7 @@ def add_marks(
 
 
 # ==================================================
-# FACULTY - VIEW ALL MARKS
+# FACULTY - VIEW MARKS
 # ==================================================
 
 @router.get("/")
@@ -165,7 +185,43 @@ def get_all_marks(
     current_faculty=Depends(require_faculty)
 ):
 
-    marks_records = db.query(Marks).all()
+    # ------------------------------------------------
+    # GET SUBJECTS ASSIGNED TO CURRENT FACULTY
+    # ------------------------------------------------
+
+    assigned_subject_ids = db.query(
+        FacultySubject.subject_id
+    ).filter(
+        FacultySubject.faculty.has(
+            user_id=current_faculty.id
+        )
+    ).all()
+
+    assigned_subject_ids = [
+        subject_id[0]
+        for subject_id in assigned_subject_ids
+    ]
+
+
+    # ------------------------------------------------
+    # NO ASSIGNED SUBJECT
+    # ------------------------------------------------
+
+    if not assigned_subject_ids:
+        return {
+            "total_records": 0,
+            "marks": []
+        }
+
+
+    # ------------------------------------------------
+    # GET ONLY ASSIGNED SUBJECT MARKS
+    # ------------------------------------------------
+
+    marks_records = db.query(Marks).filter(
+        Marks.subject_id.in_(assigned_subject_ids)
+    ).all()
+
 
     result = []
 
@@ -183,6 +239,7 @@ def get_all_marks(
             "exam_date": marks.exam_date
         })
 
+
     return {
         "total_records": len(result),
         "marks": result
@@ -199,6 +256,10 @@ def get_my_marks(
     current_student=Depends(require_student)
 ):
 
+    # ------------------------------------------------
+    # GET CURRENT STUDENT PROFILE
+    # ------------------------------------------------
+
     student = db.query(Student).filter(
         Student.user_id == current_student.id
     ).first()
@@ -209,6 +270,10 @@ def get_my_marks(
             detail="Student profile not found"
         )
 
+
+    # ------------------------------------------------
+    # GET ONLY CURRENT STUDENT MARKS
+    # ------------------------------------------------
 
     marks_records = db.query(Marks).filter(
         Marks.student_id == student.student_id

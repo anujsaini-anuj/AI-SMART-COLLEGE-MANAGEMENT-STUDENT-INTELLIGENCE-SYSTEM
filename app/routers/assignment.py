@@ -7,7 +7,8 @@ from app.database.database import get_db
 from app.database.models import (
     Assignment,
     Student,
-    Subject
+    Subject,
+    FacultySubject
 )
 
 from app.utils.auth import (
@@ -42,6 +43,28 @@ def add_assignment(
     current_faculty=Depends(require_faculty)
 ):
 
+    # ------------------------------------------------
+    # CHECK FACULTY SUBJECT AUTHORIZATION
+    # ------------------------------------------------
+
+    faculty_subject = db.query(FacultySubject).filter(
+        FacultySubject.subject_id == subject_id,
+        FacultySubject.faculty.has(
+            user_id=current_faculty.id
+        )
+    ).first()
+
+    if not faculty_subject:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not assigned to this subject"
+        )
+
+
+    # ------------------------------------------------
+    # VALIDATE STATUS
+    # ------------------------------------------------
+
     status = status.strip().lower()
 
     if status not in ["pending", "submitted", "late"]:
@@ -50,7 +73,9 @@ def add_assignment(
             detail="Status must be Pending, Submitted or Late"
         )
 
+
     # Convert to standard format
+
     status_map = {
         "pending": "Pending",
         "submitted": "Submitted",
@@ -69,7 +94,6 @@ def add_assignment(
     ).first()
 
     if not student:
-
         raise HTTPException(
             status_code=404,
             detail="Student not found"
@@ -85,7 +109,6 @@ def add_assignment(
     ).first()
 
     if not subject:
-
         raise HTTPException(
             status_code=404,
             detail="Subject not found"
@@ -97,7 +120,6 @@ def add_assignment(
     # ------------------------------------------------
 
     if max_marks <= 0:
-
         raise HTTPException(
             status_code=400,
             detail="Maximum marks must be greater than 0"
@@ -111,14 +133,12 @@ def add_assignment(
     if marks_obtained is not None:
 
         if marks_obtained < 0:
-
             raise HTTPException(
                 status_code=400,
                 detail="Marks cannot be negative"
             )
 
         if marks_obtained > max_marks:
-
             raise HTTPException(
                 status_code=400,
                 detail="Obtained marks cannot be greater than maximum marks"
@@ -132,7 +152,6 @@ def add_assignment(
     if status in ["Submitted", "Late"]:
 
         if marks_obtained is None:
-
             raise HTTPException(
                 status_code=400,
                 detail="Marks are required for submitted assignment"
@@ -150,7 +169,6 @@ def add_assignment(
     ).first()
 
     if existing_assignment:
-
         raise HTTPException(
             status_code=400,
             detail="This assignment already exists for this student and subject"
@@ -162,19 +180,12 @@ def add_assignment(
     # ------------------------------------------------
 
     assignment = Assignment(
-
         student_id=student_id,
-
         subject_id=subject_id,
-
         assignment_name=assignment_name,
-
         marks_obtained=marks_obtained,
-
         max_marks=max_marks,
-
         submission_date=submission_date,
-
         status=status
     )
 
@@ -188,7 +199,6 @@ def add_assignment(
     try:
 
         db.commit()
-
         db.refresh(assignment)
 
     except Exception:
@@ -232,7 +242,7 @@ def add_assignment(
 
 
 # ==================================================
-# FACULTY - VIEW ALL ASSIGNMENTS
+# FACULTY - VIEW ASSIGNMENTS
 # ==================================================
 
 @router.get("/")
@@ -243,9 +253,46 @@ def get_all_assignments(
     current_faculty=Depends(require_faculty)
 ):
 
+    # ------------------------------------------------
+    # GET SUBJECTS ASSIGNED TO CURRENT FACULTY
+    # ------------------------------------------------
+
+    assigned_subject_ids = db.query(
+        FacultySubject.subject_id
+    ).filter(
+        FacultySubject.faculty.has(
+            user_id=current_faculty.id
+        )
+    ).all()
+
+
+    assigned_subject_ids = [
+        subject_id[0]
+        for subject_id in assigned_subject_ids
+    ]
+
+
+    # ------------------------------------------------
+    # NO ASSIGNED SUBJECT
+    # ------------------------------------------------
+
+    if not assigned_subject_ids:
+        return {
+            "total_records": 0,
+            "assignments": []
+        }
+
+
+    # ------------------------------------------------
+    # GET ONLY ASSIGNED SUBJECT ASSIGNMENTS
+    # ------------------------------------------------
+
     assignments = db.query(
         Assignment
+    ).filter(
+        Assignment.subject_id.in_(assigned_subject_ids)
     ).all()
+
 
     result = []
 

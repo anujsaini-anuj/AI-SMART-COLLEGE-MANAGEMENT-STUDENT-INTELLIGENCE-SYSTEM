@@ -87,6 +87,12 @@ def create_student(
             detail="Password cannot be empty"
         )
 
+    if len(password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 8 characters long"
+        )
+
 
 
     # ----------------------------------------------

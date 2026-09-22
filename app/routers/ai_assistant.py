@@ -29,7 +29,9 @@ def ai_chat(
     according to their role.
     """
 
-    if not question.strip():
+    question = question.strip()
+
+    if not question:
         raise HTTPException(
             status_code=400,
             detail="Question cannot be empty"
@@ -166,8 +168,9 @@ Instructions:
         }
 
     except Exception as e:
+       print(f"AI Assistant Error: {e}")
 
-        raise HTTPException(
+       raise HTTPException(
             status_code=500,
-            detail=f"AI Assistant error: {str(e)}"
+            detail="AI Assistant is temporarily unavailable. Please try again later."
         )

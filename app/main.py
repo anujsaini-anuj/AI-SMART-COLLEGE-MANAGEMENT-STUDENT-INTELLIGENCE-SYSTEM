@@ -20,6 +20,7 @@ from app.routers.recommendation import router as recommendation_router
 from app.routers.ai_assistant import router as ai_assistant_router
 from app.routers.faculty_subject import router as faculty_subject_router
 from app.routers.dashboard import router as dashboard_router
+from app.routers import intelligence
 
 Base.metadata.create_all(bind=engine)
 
@@ -54,3 +55,6 @@ app.include_router(recommendation_router)
 app.include_router(ai_assistant_router)
 app.include_router(faculty_subject_router)
 app.include_router(dashboard_router)
+app.include_router(
+    intelligence.router
+)

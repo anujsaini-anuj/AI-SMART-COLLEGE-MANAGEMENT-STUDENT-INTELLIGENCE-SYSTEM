@@ -9,10 +9,14 @@ from app.database.models import (
     Subject,
     Attendance,
     Marks,
-    Assignment
+    Assignment,
+    FacultySubject
 )
 
-from app.utils.auth import require_faculty, require_student
+from app.utils.auth import (
+    require_faculty,
+    require_student
+)
 
 
 router = APIRouter(
@@ -27,7 +31,6 @@ router = APIRouter(
 
 @router.post("/calculate")
 def calculate_performance(
-
     student_id: str,
     subject_id: int,
 
@@ -35,6 +38,8 @@ def calculate_performance(
 
     current_faculty=Depends(require_faculty)
 ):
+
+    
 
     # ------------------------------------------------
     # CHECK STUDENT
@@ -65,6 +70,25 @@ def calculate_performance(
         raise HTTPException(
             status_code=404,
             detail="Subject not found"
+        )
+
+
+    # ------------------------------------------------
+    # CHECK FACULTY SUBJECT ASSIGNMENT
+    # ------------------------------------------------
+
+    faculty_subject = db.query(FacultySubject).filter(
+        FacultySubject.subject_id == subject_id,
+        FacultySubject.faculty.has(
+            user_id=current_faculty.id
+        )
+    ).first()
+
+    if not faculty_subject:
+
+        raise HTTPException(
+            status_code=403,
+            detail="You are not assigned to this subject"
         )
 
 
@@ -303,8 +327,6 @@ def calculate_performance(
     }
 
 
-
-
 # ==================================================
 # GET ALL PERFORMANCE - FACULTY
 # ==================================================
@@ -314,26 +336,87 @@ def get_all_performance(
     db: Session = Depends(get_db),
     current_faculty=Depends(require_faculty)
 ):
-    performance_records = db.query(Performance).all()
+
+    # ------------------------------------------------
+    # GET FACULTY ASSIGNED SUBJECTS
+    # ------------------------------------------------
+
+    assigned_subject_ids = [
+        item.subject_id
+        for item in db.query(FacultySubject).filter(
+            FacultySubject.faculty.has(
+                user_id=current_faculty.id
+            )
+        ).all()
+    ]
+
+
+    # ------------------------------------------------
+    # NO ASSIGNED SUBJECTS
+    # ------------------------------------------------
+
+    if not assigned_subject_ids:
+
+        return {
+            "total_records": 0,
+            "performance": []
+        }
+
+
+    # ------------------------------------------------
+    # GET PERFORMANCE ONLY FOR ASSIGNED SUBJECTS
+    # ------------------------------------------------
+
+    performance_records = db.query(Performance).filter(
+        Performance.subject_id.in_(assigned_subject_ids)
+    ).all()
+
+
+    # ------------------------------------------------
+    # BUILD RESPONSE
+    # ------------------------------------------------
 
     result = []
 
     for performance in performance_records:
+
         result.append({
+
             "performance_id": performance.id,
-            "student_id": performance.student.student_id,
-            "student_name": performance.student.name,
-            "subject_id": performance.subject.id,
-            "subject_name": performance.subject.name,
-            "attendance_percentage": performance.attendance_percentage,
-            "marks_percentage": performance.marks_percentage,
-            "assignment_percentage": performance.assignment_percentage,
-            "overall_percentage": performance.overall_percentage,
-            "performance_level": performance.performance_level
+
+            "student_id":
+                performance.student.student_id,
+
+            "student_name":
+                performance.student.name,
+
+            "subject_id":
+                performance.subject.id,
+
+            "subject_name":
+                performance.subject.name,
+
+            "attendance_percentage":
+                performance.attendance_percentage,
+
+            "marks_percentage":
+                performance.marks_percentage,
+
+            "assignment_percentage":
+                performance.assignment_percentage,
+
+            "overall_percentage":
+                performance.overall_percentage,
+
+            "performance_level":
+                performance.performance_level
         })
 
+
     return {
+
         "total_records": len(result),
+
         "performance": result
     }
 
@@ -344,39 +427,123 @@ def get_all_performance(
 
 @router.get("/student/{student_id}")
 def get_student_performance(
+
     student_id: str,
+
     db: Session = Depends(get_db),
+
     current_faculty=Depends(require_faculty)
 ):
+
+    # ------------------------------------------------
+    # CHECK STUDENT
+    # ------------------------------------------------
+
     student = db.query(Student).filter(
         Student.student_id == student_id
     ).first()
 
     if not student:
+
         raise HTTPException(
             status_code=404,
             detail="Student not found"
         )
 
+
+    # ------------------------------------------------
+    # GET FACULTY ASSIGNED SUBJECTS
+    # ------------------------------------------------
+
+    assigned_subject_ids = [
+        item.subject_id
+        for item in db.query(FacultySubject).filter(
+            FacultySubject.faculty.has(
+                user_id=current_faculty.id
+            )
+        ).all()
+    ]
+
+
+    # ------------------------------------------------
+    # NO ASSIGNED SUBJECTS
+    # ------------------------------------------------
+
+    if not assigned_subject_ids:
+
+        return {
+
+            "student_id":
+                student.student_id,
+
+            "student_name":
+                student.name,
+
+            "total_subjects": 0,
+
+            "performance": []
+        }
+
+
+    # ------------------------------------------------
+    # GET ONLY ASSIGNED SUBJECT PERFORMANCE
+    # ------------------------------------------------
+
     performance_records = db.query(Performance).filter(
-        Performance.student_id == student_id
+
+        Performance.student_id == student_id,
+
+        Performance.subject_id.in_(
+            assigned_subject_ids
+        )
+
     ).all()
 
+
+    # ------------------------------------------------
+    # RESPONSE
+    # ------------------------------------------------
+
     return {
-        "student_id": student.student_id,
-        "student_name": student.name,
-        "total_subjects": len(performance_records),
+
+        "student_id":
+            student.student_id,
+
+        "student_name":
+            student.name,
+
+        "total_subjects":
+            len(performance_records),
+
         "performance": [
+
             {
-                "performance_id": performance.id,
-                "subject_id": performance.subject.id,
-                "subject_name": performance.subject.name,
-                "attendance_percentage": performance.attendance_percentage,
-                "marks_percentage": performance.marks_percentage,
-                "assignment_percentage": performance.assignment_percentage,
-                "overall_percentage": performance.overall_percentage,
-                "performance_level": performance.performance_level
+
+                "performance_id":
+                    performance.id,
+
+                "subject_id":
+                    performance.subject.id,
+
+                "subject_name":
+                    performance.subject.name,
+
+                "attendance_percentage":
+                    performance.attendance_percentage,
+
+                "marks_percentage":
+                    performance.marks_percentage,
+
+                "assignment_percentage":
+                    performance.assignment_percentage,
+
+                "overall_percentage":
+                    performance.overall_percentage,
+
+                "performance_level":
+                    performance.performance_level
             }
+
             for performance in performance_records
         ]
     }
@@ -388,38 +555,81 @@ def get_student_performance(
 
 @router.get("/my-performance")
 def get_my_performance(
+
     db: Session = Depends(get_db),
+
     current_student=Depends(require_student)
 ):
+
+    # ------------------------------------------------
+    # GET CURRENT STUDENT PROFILE
+    # ------------------------------------------------
+
     student = db.query(Student).filter(
         Student.user_id == current_student.id
     ).first()
 
     if not student:
+
         raise HTTPException(
             status_code=404,
             detail="Student profile not found"
         )
 
+
+    # ------------------------------------------------
+    # GET ONLY CURRENT STUDENT PERFORMANCE
+    # ------------------------------------------------
+
     performance_records = db.query(Performance).filter(
         Performance.student_id == student.student_id
     ).all()
 
+
+    # ------------------------------------------------
+    # RESPONSE
+    # ------------------------------------------------
+
     return {
-        "student_id": student.student_id,
-        "student_name": student.name,
-        "total_subjects": len(performance_records),
+
+        "student_id":
+            student.student_id,
+
+        "student_name":
+            student.name,
+
+        "total_subjects":
+            len(performance_records),
+
         "performance": [
+
             {
-                "performance_id": performance.id,
-                "subject_id": performance.subject.id,
-                "subject_name": performance.subject.name,
-                "attendance_percentage": performance.attendance_percentage,
-                "marks_percentage": performance.marks_percentage,
-                "assignment_percentage": performance.assignment_percentage,
-                "overall_percentage": performance.overall_percentage,
-                "performance_level": performance.performance_level
+
+                "performance_id":
+                    performance.id,
+
+                "subject_id":
+                    performance.subject.id,
+
+                "subject_name":
+                    performance.subject.name,
+
+                "attendance_percentage":
+                    performance.attendance_percentage,
+
+                "marks_percentage":
+                    performance.marks_percentage,
+
+                "assignment_percentage":
+                    performance.assignment_percentage,
+
+                "overall_percentage":
+                    performance.overall_percentage,
+
+                "performance_level":
+                    performance.performance_level
             }
+
             for performance in performance_records
         ]
     }

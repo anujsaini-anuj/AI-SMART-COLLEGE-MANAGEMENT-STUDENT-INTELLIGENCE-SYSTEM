@@ -255,6 +255,7 @@ class Course(Base):
         back_populates="course"
     )
 
+   
 
 # ==================================================
 # STUDENT
@@ -808,7 +809,8 @@ class Prediction(Base):
         UniqueConstraint(
             "student_id",
             "subject_id",
-            name="unique_student_subject_prediction"
+            "prediction_type",
+            name="unique_student_subject_prediction_type"
         ),
     )
 
@@ -840,6 +842,12 @@ class Prediction(Base):
         String(100),
         nullable=False
     )
+
+    prediction_type = Column(
+    String(100),
+    nullable=False,
+    default="Current Performance"
+)
 
     created_at = Column(
         DateTime(timezone=True),
@@ -901,6 +909,80 @@ class Recommendation(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False
+    )
+
+    student = relationship(
+        "Student"
+    )
+
+    subject = relationship(
+        "Subject"
+    )
+
+
+
+
+class StudentMLRecord(Base):
+    __tablename__ = "student_ml_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    student_id = Column(
+        String(50),
+        ForeignKey("students.student_id"),
+        nullable=False
+    )
+
+    subject_id = Column(
+        Integer,
+        ForeignKey("subjects.id"),
+        nullable=False
+    )
+
+    # Previous academic information
+    attendance_percentage = Column(
+        Integer,
+        nullable=False
+    )
+
+    internal_marks_percentage = Column(
+        Integer,
+        nullable=False
+    )
+
+    assignment_percentage = Column(
+        Integer,
+        nullable=False
+    )
+
+    previous_exam_percentage = Column(
+        Integer,
+        nullable=False
+    )
+
+    academic_trend = Column(
+        Integer,
+        nullable=False
+    )
+
+    # Future / final performance - ML TARGET
+    final_exam_percentage = Column(
+        Integer,
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc)
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "student_id",
+            "subject_id",
+            "previous_exam_percentage",
+            name="uq_student_ml_record"
+        ),
     )
 
     student = relationship(
