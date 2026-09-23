@@ -6,6 +6,19 @@ from app.database.models import StudentMLRecord
 
 
 def get_ml_training_data(db: Session):
+    """
+    Get training data from StudentMLRecord table.
+
+    Features:
+    1. Attendance percentage
+    2. Internal marks percentage
+    3. Assignment percentage
+    4. Previous exam percentage
+    5. Academic trend
+
+    Target:
+    Final exam percentage
+    """
 
     records = db.query(StudentMLRecord).all()
 
@@ -39,6 +52,7 @@ def get_ml_training_data(db: Session):
             record.final_exam_percentage
         )
 
+    # Convert to NumPy arrays
     X = np.array(
         X,
         dtype=float

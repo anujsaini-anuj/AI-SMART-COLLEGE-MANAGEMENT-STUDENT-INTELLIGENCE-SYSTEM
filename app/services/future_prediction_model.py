@@ -14,8 +14,14 @@ from sklearn.metrics import (
 
 from sqlalchemy.orm import Session
 
-from app.services.ml_dataset_service import get_ml_training_data
+from app.services.ml_dataset_service import (
+    get_ml_training_data
+)
 
+
+# ===================================================
+# MODEL CONFIGURATION
+# ===================================================
 
 MODEL_DIR = "app/ml_models"
 
@@ -25,22 +31,46 @@ MODEL_PATH = os.path.join(
 )
 
 
-def train_and_save_future_model(db: Session):
+# ===================================================
+# TRAIN AND SAVE FUTURE PERFORMANCE MODEL
+# ===================================================
 
-    # Get training data from StudentMLRecord table
+def train_and_save_future_model(db: Session):
+    """
+    Train Random Forest model for future final exam
+    performance prediction and save the trained model.
+    """
+
+    # -------------------------------------------------
+    # GET TRAINING DATA
+    # -------------------------------------------------
+
     X, y = get_ml_training_data(db)
 
-    X = np.array(X, dtype=float)
-    y = np.array(y, dtype=float)
+    X = np.array(
+        X,
+        dtype=float
+    )
 
-    # Minimum records required
+    y = np.array(
+        y,
+        dtype=float
+    )
+
+    # -------------------------------------------------
+    # MINIMUM DATA CHECK
+    # -------------------------------------------------
+
     if len(X) < 9:
         raise ValueError(
             "At least 9 ML training records are required "
             "for future performance model training."
         )
 
-    # Split data into training and testing
+    # -------------------------------------------------
+    # TRAIN / TEST SPLIT
+    # -------------------------------------------------
+
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
@@ -48,19 +78,36 @@ def train_and_save_future_model(db: Session):
         random_state=42
     )
 
-    # Create Random Forest model
+    # -------------------------------------------------
+    # CREATE RANDOM FOREST MODEL
+    # -------------------------------------------------
+
     model = RandomForestRegressor(
         n_estimators=100,
         random_state=42
     )
 
-    # Train model
-    model.fit(X_train, y_train)
+    # -------------------------------------------------
+    # TRAIN MODEL
+    # -------------------------------------------------
 
-    # Test model
-    y_pred = model.predict(X_test)
+    model.fit(
+        X_train,
+        y_train
+    )
 
-    # Evaluation metrics
+    # -------------------------------------------------
+    # TEST MODEL
+    # -------------------------------------------------
+
+    y_pred = model.predict(
+        X_test
+    )
+
+    # -------------------------------------------------
+    # EVALUATION
+    # -------------------------------------------------
+
     mae = mean_absolute_error(
         y_test,
         y_pred
@@ -79,26 +126,60 @@ def train_and_save_future_model(db: Session):
     )
 
     metrics = {
-        "mae": round(float(mae), 2),
-        "rmse": round(float(rmse), 2),
-        "r2_score": round(float(r2), 2)
+        "mae": round(
+            float(mae),
+            2
+        ),
+
+        "rmse": round(
+            float(rmse),
+            2
+        ),
+
+        "r2_score": round(
+            float(r2),
+            2
+        )
     }
 
-    # Train final model using all available records
+    # -------------------------------------------------
+    # TRAIN FINAL MODEL USING ALL DATA
+    # -------------------------------------------------
+
     final_model = RandomForestRegressor(
         n_estimators=100,
         random_state=42
     )
 
-    final_model.fit(X, y)
+    final_model.fit(
+        X,
+        y
+    )
 
-    # Model information
+    # -------------------------------------------------
+    # CREATE MODEL DIRECTORY
+    # -------------------------------------------------
+
+    os.makedirs(
+        MODEL_DIR,
+        exist_ok=True
+    )
+
+    # -------------------------------------------------
+    # MODEL ARTIFACT
+    # -------------------------------------------------
+
     model_artifact = {
+
         "model": final_model,
 
-        "model_name": "Random Forest Regressor",
+        "model_name": (
+            "Random Forest Regressor"
+        ),
 
-        "prediction_type": "Future Final Exam Performance",
+        "prediction_type": (
+            "Future Final Exam Performance"
+        ),
 
         "features": [
             "attendance_percentage",
@@ -108,24 +189,25 @@ def train_and_save_future_model(db: Session):
             "academic_trend"
         ],
 
-        "target": "final_exam_percentage",
+        "target": (
+            "final_exam_percentage"
+        ),
 
         "metrics": metrics,
 
         "training_samples": len(X),
 
-        "trained_at": datetime.now(
-            timezone.utc
-        ).isoformat()
+        "trained_at": (
+            datetime.now(
+                timezone.utc
+            ).isoformat()
+        )
     }
 
-    # Create model directory
-    os.makedirs(
-        MODEL_DIR,
-        exist_ok=True
-    )
+    # -------------------------------------------------
+    # SAVE MODEL
+    # -------------------------------------------------
 
-    # Save model
     joblib.dump(
         model_artifact,
         MODEL_PATH
@@ -134,9 +216,18 @@ def train_and_save_future_model(db: Session):
     return model_artifact
 
 
-def load_future_prediction_model():
+# ===================================================
+# LOAD SAVED MODEL
+# ===================================================
 
-    if not os.path.exists(MODEL_PATH):
+def load_future_prediction_model():
+    """
+    Load the previously trained future prediction model.
+    """
+
+    if not os.path.exists(
+        MODEL_PATH
+    ):
         raise FileNotFoundError(
             "Future performance model not found. "
             "Please train the model first."
@@ -149,6 +240,10 @@ def load_future_prediction_model():
     return model_artifact
 
 
+# ===================================================
+# PREDICT FUTURE PERFORMANCE
+# ===================================================
+
 def predict_future_performance(
     attendance_percentage,
     internal_marks_percentage,
@@ -156,10 +251,25 @@ def predict_future_performance(
     previous_exam_percentage,
     academic_trend
 ):
+    """
+    Predict future final exam percentage.
+    """
 
-    model_artifact = load_future_prediction_model()
+    # -------------------------------------------------
+    # LOAD MODEL
+    # -------------------------------------------------
 
-    model = model_artifact["model"]
+    model_artifact = (
+        load_future_prediction_model()
+    )
+
+    model = model_artifact[
+        "model"
+    ]
+
+    # -------------------------------------------------
+    # PREPARE INPUT DATA
+    # -------------------------------------------------
 
     input_data = np.array(
         [[
@@ -172,11 +282,18 @@ def predict_future_performance(
         dtype=float
     )
 
+    # -------------------------------------------------
+    # MAKE PREDICTION
+    # -------------------------------------------------
+
     prediction = model.predict(
         input_data
     )[0]
 
-    # Keep prediction between 0 and 100
+    # -------------------------------------------------
+    # KEEP VALUE BETWEEN 0 AND 100
+    # -------------------------------------------------
+
     prediction = round(
         max(
             0,

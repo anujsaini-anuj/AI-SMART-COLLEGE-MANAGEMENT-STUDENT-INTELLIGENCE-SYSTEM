@@ -38,12 +38,17 @@ def admin_dashboard(
     total_courses = db.query(Course).count()
     total_subjects = db.query(Subject).count()
 
-    # Average attendance
+    # =====================================================
+    # AVERAGE ATTENDANCE
+    # =====================================================
+
     attendance_records = db.query(Attendance).all()
 
     if attendance_records:
+
         present_count = sum(
-            1 for record in attendance_records
+            1
+            for record in attendance_records
             if record.status.lower() == "present"
         )
 
@@ -51,27 +56,41 @@ def admin_dashboard(
             (present_count / len(attendance_records)) * 100,
             2
         )
+
     else:
         average_attendance = 0
 
-    # Average marks
+    # =====================================================
+    # AVERAGE MARKS
+    # =====================================================
+
     marks_records = db.query(Marks).all()
 
-    if marks_records:
+    valid_marks_records = [
+        record
+        for record in marks_records
+        if record.max_marks > 0
+    ]
+
+    if valid_marks_records:
+
         total_marks_percentage = sum(
             (record.marks_obtained / record.max_marks) * 100
-            for record in marks_records
-            if record.max_marks > 0
+            for record in valid_marks_records
         )
 
         average_marks = round(
-            total_marks_percentage / len(marks_records),
+            total_marks_percentage / len(valid_marks_records),
             2
         )
+
     else:
         average_marks = 0
 
-    # Risk distribution
+    # =====================================================
+    # RISK DISTRIBUTION
+    # =====================================================
+
     high_risk = db.query(StudentRisk).filter(
         StudentRisk.risk_level == "High"
     ).count()
@@ -84,7 +103,10 @@ def admin_dashboard(
         StudentRisk.risk_level == "Low"
     ).count()
 
-    # Performance distribution
+    # =====================================================
+    # PERFORMANCE DISTRIBUTION
+    # =====================================================
+
     excellent = db.query(Performance).filter(
         Performance.performance_level == "Excellent"
     ).count()
@@ -151,7 +173,10 @@ def faculty_dashboard(
             "message": "Faculty profile not found"
         }
 
-    # Assigned subjects
+    # =====================================================
+    # ASSIGNED SUBJECTS
+    # =====================================================
+
     assigned_subjects = [
         assignment.subject
         for assignment in faculty.faculty_subjects
@@ -162,25 +187,42 @@ def faculty_dashboard(
         for subject in assigned_subjects
     ]
 
-    # Performance only for assigned subjects
+    # =====================================================
+    # PERFORMANCE
+    # Only assigned subjects
+    # =====================================================
+
     performance_records = []
 
     if subject_ids:
+
         performance_records = db.query(Performance).filter(
             Performance.subject_id.in_(subject_ids)
         ).all()
 
-    # Risk only for assigned subjects
+    # =====================================================
+    # RISK
+    # Only assigned subjects
+    # =====================================================
+
     risk_records = []
 
     if subject_ids:
+
         risk_records = db.query(StudentRisk).filter(
             StudentRisk.subject_id.in_(subject_ids)
         ).all()
 
-    # Students represented in faculty's assigned subjects
+    # =====================================================
+    # STUDENTS
+    # Students represented in performance records
+    # =====================================================
+
     student_ids = list(
-        set(record.student_id for record in performance_records)
+        set(
+            record.student_id
+            for record in performance_records
+        )
     )
 
     return {
@@ -208,34 +250,46 @@ def faculty_dashboard(
 
         "risk_overview": {
             "high_risk": sum(
-                1 for record in risk_records
+                1
+                for record in risk_records
                 if record.risk_level == "High"
             ),
+
             "medium_risk": sum(
-                1 for record in risk_records
+                1
+                for record in risk_records
                 if record.risk_level == "Medium"
             ),
+
             "low_risk": sum(
-                1 for record in risk_records
+                1
+                for record in risk_records
                 if record.risk_level == "Low"
             )
         },
 
         "performance_overview": {
             "excellent": sum(
-                1 for record in performance_records
+                1
+                for record in performance_records
                 if record.performance_level == "Excellent"
             ),
+
             "good": sum(
-                1 for record in performance_records
+                1
+                for record in performance_records
                 if record.performance_level == "Good"
             ),
+
             "average": sum(
-                1 for record in performance_records
+                1
+                for record in performance_records
                 if record.performance_level == "Average"
             ),
+
             "poor": sum(
-                1 for record in performance_records
+                1
+                for record in performance_records
                 if record.performance_level == "Poor"
             )
         }
@@ -264,35 +318,69 @@ def student_dashboard(
 
     student_id = student.student_id
 
+    # =====================================================
+    # PERFORMANCE
+    # =====================================================
+
     performance_records = db.query(Performance).filter(
         Performance.student_id == student_id
     ).all()
+
+    # =====================================================
+    # RISK
+    # =====================================================
 
     risk_records = db.query(StudentRisk).filter(
         StudentRisk.student_id == student_id
     ).all()
 
+    # =====================================================
+    # FUTURE PERFORMANCE PREDICTIONS
+    # Only final exam future predictions
+    # =====================================================
+
     prediction_records = db.query(Prediction).filter(
-        Prediction.student_id == student_id
+        Prediction.student_id == student_id,
+        Prediction.prediction_type == "Future Final Exam Performance"
+    ).order_by(
+        Prediction.created_at.desc()
     ).all()
+
+    # =====================================================
+    # RECOMMENDATIONS
+    # =====================================================
 
     recommendation_records = db.query(Recommendation).filter(
         Recommendation.student_id == student_id
+    ).order_by(
+        Recommendation.created_at.desc()
     ).all()
+
+    # =====================================================
+    # ATTENDANCE
+    # =====================================================
 
     attendance_records = db.query(Attendance).filter(
         Attendance.student_id == student_id
     ).all()
 
+    # =====================================================
+    # MARKS
+    # =====================================================
+
     marks_records = db.query(Marks).filter(
         Marks.student_id == student_id
     ).all()
 
-    # Overall attendance
+    # =====================================================
+    # OVERALL ATTENDANCE
+    # =====================================================
+
     if attendance_records:
 
         present_count = sum(
-            1 for record in attendance_records
+            1
+            for record in attendance_records
             if record.status.lower() == "present"
         )
 
@@ -304,20 +392,32 @@ def student_dashboard(
     else:
         attendance_percentage = 0
 
-    # Overall marks
-    if marks_records:
+    # =====================================================
+    # OVERALL MARKS
+    # =====================================================
+
+    valid_marks_records = [
+        record
+        for record in marks_records
+        if record.max_marks > 0
+    ]
+
+    if valid_marks_records:
 
         marks_percentage = round(
             sum(
                 (record.marks_obtained / record.max_marks) * 100
-                for record in marks_records
-                if record.max_marks > 0
-            ) / len(marks_records),
+                for record in valid_marks_records
+            ) / len(valid_marks_records),
             2
         )
 
     else:
         marks_percentage = 0
+
+    # =====================================================
+    # RESPONSE
+    # =====================================================
 
     return {
         "dashboard": "Student Dashboard",
