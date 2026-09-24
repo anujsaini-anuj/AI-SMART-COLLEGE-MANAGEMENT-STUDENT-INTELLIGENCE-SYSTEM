@@ -40,6 +40,58 @@ def _get_subject(
 
 
 # ============================================================
+# STUDENT LOOKUP
+# ============================================================
+
+def find_student_by_name(
+    db: Session,
+    student_name: str
+):
+    """
+    Find a student using student name.
+
+    Example:
+    Anuj -> STU001
+    Anuj Kumar -> STU001
+    """
+
+    student_name = student_name.strip()
+
+    if not student_name:
+        return {
+            "error": "Student name cannot be empty."
+        }
+
+    students = db.query(Student).filter(
+        Student.name.ilike(f"%{student_name}%")
+    ).all()
+
+    if not students:
+        return {
+            "error": "Student not found."
+        }
+
+    if len(students) > 1:
+        return {
+            "error": "Multiple students found.",
+            "students": [
+                {
+                    "student_id": student.student_id,
+                    "student_name": student.name
+                }
+                for student in students
+            ]
+        }
+
+    student = students[0]
+
+    return {
+        "student_id": student.student_id,
+        "student_name": student.name
+    }
+
+
+# ============================================================
 # GET FACULTY ASSIGNED SUBJECT IDS
 # ============================================================
 
@@ -151,9 +203,7 @@ def student_has_subject(
     """
     Check whether the student belongs to the requested subject.
 
-    The current database design connects students to courses
-    and subjects to courses. Therefore, course matching is
-    checked first.
+    Course matching is checked first.
 
     Existing academic records are also checked.
     """
@@ -237,7 +287,8 @@ def student_has_subject(
 def get_student_performance(
     db: Session,
     student_id: str,
-    subject_id: int | None = None
+    subject_id: int | None = None,
+    allowed_subject_ids: list[int] | None = None
 ):
 
     student = _get_student(
@@ -255,8 +306,20 @@ def get_student_performance(
     )
 
     if subject_id is not None:
+
         query = query.filter(
             Performance.subject_id == subject_id
+        )
+
+    elif allowed_subject_ids is not None:
+
+        if not allowed_subject_ids:
+            return {
+                "message": "No subjects assigned to this faculty."
+            }
+
+        query = query.filter(
+            Performance.subject_id.in_(allowed_subject_ids)
         )
 
     records = query.all()
@@ -310,7 +373,8 @@ def get_student_performance(
 def get_student_attendance(
     db: Session,
     student_id: str,
-    subject_id: int | None = None
+    subject_id: int | None = None,
+    allowed_subject_ids: list[int] | None = None
 ):
 
     student = _get_student(
@@ -327,9 +391,23 @@ def get_student_attendance(
         Attendance.student_id == student_id
     )
 
+    # Specific subject
     if subject_id is not None:
+
         query = query.filter(
             Attendance.subject_id == subject_id
+        )
+
+    # Faculty overall query
+    elif allowed_subject_ids is not None:
+
+        if not allowed_subject_ids:
+            return {
+                "message": "No subjects assigned to this faculty."
+            }
+
+        query = query.filter(
+            Attendance.subject_id.in_(allowed_subject_ids)
         )
 
     records = query.order_by(
@@ -377,7 +455,8 @@ def get_student_attendance(
 def get_student_marks(
     db: Session,
     student_id: str,
-    subject_id: int | None = None
+    subject_id: int | None = None,
+    allowed_subject_ids: list[int] | None = None
 ):
 
     student = _get_student(
@@ -394,9 +473,23 @@ def get_student_marks(
         Marks.student_id == student_id
     )
 
+    # Specific subject
     if subject_id is not None:
+
         query = query.filter(
             Marks.subject_id == subject_id
+        )
+
+    # Faculty overall query
+    elif allowed_subject_ids is not None:
+
+        if not allowed_subject_ids:
+            return {
+                "message": "No subjects assigned to this faculty."
+            }
+
+        query = query.filter(
+            Marks.subject_id.in_(allowed_subject_ids)
         )
 
     records = query.order_by(
@@ -450,7 +543,8 @@ def get_student_marks(
 def get_student_risk(
     db: Session,
     student_id: str,
-    subject_id: int | None = None
+    subject_id: int | None = None,
+    allowed_subject_ids: list[int] | None = None
 ):
 
     student = _get_student(
@@ -467,9 +561,23 @@ def get_student_risk(
         StudentRisk.student_id == student_id
     )
 
+    # Specific subject
     if subject_id is not None:
+
         query = query.filter(
             StudentRisk.subject_id == subject_id
+        )
+
+    # Faculty overall query
+    elif allowed_subject_ids is not None:
+
+        if not allowed_subject_ids:
+            return {
+                "message": "No subjects assigned to this faculty."
+            }
+
+        query = query.filter(
+            StudentRisk.subject_id.in_(allowed_subject_ids)
         )
 
     records = query.all()
@@ -516,7 +624,8 @@ def get_student_risk(
 def get_student_recommendations(
     db: Session,
     student_id: str,
-    subject_id: int | None = None
+    subject_id: int | None = None,
+    allowed_subject_ids: list[int] | None = None
 ):
 
     student = _get_student(
@@ -533,9 +642,23 @@ def get_student_recommendations(
         Recommendation.student_id == student_id
     )
 
+    # Specific subject
     if subject_id is not None:
+
         query = query.filter(
             Recommendation.subject_id == subject_id
+        )
+
+    # Faculty overall query
+    elif allowed_subject_ids is not None:
+
+        if not allowed_subject_ids:
+            return {
+                "message": "No subjects assigned to this faculty."
+            }
+
+        query = query.filter(
+            Recommendation.subject_id.in_(allowed_subject_ids)
         )
 
     records = query.order_by(
@@ -659,7 +782,8 @@ def get_low_attendance_students(
 
     if threshold < 0 or threshold > 100:
         return {
-            "error": "Threshold must be between 0 and 100."
+            "error":
+                "Threshold must be between 0 and 100."
         }
 
     # --------------------------------------------------------
@@ -1018,6 +1142,69 @@ def create_ai_tools(
     elif current_user.role in ["faculty", "admin"]:
 
         # ====================================================
+        # STUDENT LOOKUP
+        # ====================================================
+
+        @tool
+        def find_student(
+            student_name: str
+        ):
+            """
+            Find a student using the student's name.
+
+            Example:
+            Anuj -> STU001
+            Anuj Kumar -> STU001
+            """
+
+            student_name = student_name.strip()
+
+            if not student_name:
+                return {
+                    "error":
+                        "Student name cannot be empty."
+                }
+
+            students = db.query(Student).filter(
+                Student.name.ilike(
+                    f"%{student_name}%"
+                )
+            ).all()
+
+            if not students:
+                return {
+                    "error":
+                        "Student not found."
+                }
+
+            if len(students) > 1:
+                return {
+                    "error":
+                        "Multiple students found. Please provide the full name or Student ID.",
+
+                    "students": [
+                        {
+                            "student_id":
+                                student.student_id,
+
+                            "student_name":
+                                student.name
+                        }
+                        for student in students
+                    ]
+                }
+
+            student = students[0]
+
+            return {
+                "student_id":
+                    student.student_id,
+
+                "student_name":
+                    student.name
+            }
+
+        # ====================================================
         # SUBJECT LOOKUP
         # ====================================================
 
@@ -1026,7 +1213,10 @@ def create_ai_tools(
             subject_name: str
         ):
             """
-            Find a subject using its name or subject code.
+            Find a subject using subject name or subject code.
+
+            Faculty can access only assigned subjects.
+            Admin can access all subjects.
             """
 
             subject_name = subject_name.strip()
@@ -1037,9 +1227,9 @@ def create_ai_tools(
                         "Subject name cannot be empty."
                 }
 
-            # -----------------------------------------------
+            # ------------------------------------------------
             # FACULTY
-            # -----------------------------------------------
+            # ------------------------------------------------
 
             if current_user.role == "faculty":
 
@@ -1082,9 +1272,9 @@ def create_ai_tools(
                         subject.code
                 }
 
-            # -----------------------------------------------
+            # ------------------------------------------------
             # ADMIN
-            # -----------------------------------------------
+            # ------------------------------------------------
 
             return find_subject_by_name(
                 db,
@@ -1173,31 +1363,60 @@ def create_ai_tools(
         @tool
         def student_performance(
             student_id: str,
-            subject_id: int
+            subject_id: int | None = None
         ):
             """
-            Get a student's performance for a subject.
+            Get a student's performance.
 
-            Faculty can only access subjects assigned
-            to them.
+            Admin:
+            - Can access all subjects.
+
+            Faculty:
+            - Can access only assigned subjects.
+            - If subject_id is not provided, only assigned
+              subject data is returned.
             """
 
             student_id = student_id.strip()
 
-            # Faculty authorization
+            allowed_subject_ids = None
+
+            # ------------------------------------------------
+            # FACULTY AUTHORIZATION
+            # ------------------------------------------------
+
             if current_user.role == "faculty":
 
-                allowed = faculty_has_subject_access(
-                    db,
-                    current_user.id,
-                    subject_id
-                )
+                if subject_id is not None:
 
-                if not allowed:
-                    return {
-                        "error":
-                            "Access denied. This subject is not assigned to you."
-                    }
+                    allowed = faculty_has_subject_access(
+                        db,
+                        current_user.id,
+                        subject_id
+                    )
+
+                    if not allowed:
+                        return {
+                            "error":
+                                "Access denied. This subject is not assigned to you."
+                        }
+
+                else:
+
+                    allowed_subject_ids = get_faculty_subject_ids(
+                        db,
+                        current_user.id
+                    )
+
+                    if not allowed_subject_ids:
+                        return {
+                            "error":
+                                "No subjects assigned to this faculty."
+                        }
+
+            # ------------------------------------------------
+            # STUDENT VALIDATION
+            # ------------------------------------------------
 
             student = _get_student(
                 db,
@@ -1210,20 +1429,27 @@ def create_ai_tools(
                         "Student not found."
                 }
 
-            if not student_has_subject(
-                db,
-                student_id,
-                subject_id
-            ):
-                return {
-                    "error":
-                        "This student does not have data for the requested subject."
-                }
+            # ------------------------------------------------
+            # SUBJECT VALIDATION
+            # ------------------------------------------------
+
+            if subject_id is not None:
+
+                if not student_has_subject(
+                    db,
+                    student_id,
+                    subject_id
+                ):
+                    return {
+                        "error":
+                            "This student does not have data for the requested subject."
+                    }
 
             return get_student_performance(
                 db,
                 student_id,
-                subject_id
+                subject_id,
+                allowed_subject_ids
             )
 
         # ====================================================
@@ -1233,30 +1459,60 @@ def create_ai_tools(
         @tool
         def student_attendance(
             student_id: str,
-            subject_id: int
+            subject_id: int | None = None
         ):
             """
-            Get a student's attendance for a subject.
+            Get a student's attendance.
 
-            Faculty can only access subjects assigned
-            to them.
+            Admin:
+            - Can access all subjects.
+
+            Faculty:
+            - Can access only assigned subjects.
+            - If subject_id is not provided, only attendance
+              from assigned subjects is returned.
             """
 
             student_id = student_id.strip()
 
+            allowed_subject_ids = None
+
+            # ------------------------------------------------
+            # FACULTY AUTHORIZATION
+            # ------------------------------------------------
+
             if current_user.role == "faculty":
 
-                allowed = faculty_has_subject_access(
-                    db,
-                    current_user.id,
-                    subject_id
-                )
+                if subject_id is not None:
 
-                if not allowed:
-                    return {
-                        "error":
-                            "Access denied. This subject is not assigned to you."
-                    }
+                    allowed = faculty_has_subject_access(
+                        db,
+                        current_user.id,
+                        subject_id
+                    )
+
+                    if not allowed:
+                        return {
+                            "error":
+                                "Access denied. This subject is not assigned to you."
+                        }
+
+                else:
+
+                    allowed_subject_ids = get_faculty_subject_ids(
+                        db,
+                        current_user.id
+                    )
+
+                    if not allowed_subject_ids:
+                        return {
+                            "error":
+                                "No subjects assigned to this faculty."
+                        }
+
+            # ------------------------------------------------
+            # STUDENT VALIDATION
+            # ------------------------------------------------
 
             student = _get_student(
                 db,
@@ -1269,21 +1525,75 @@ def create_ai_tools(
                         "Student not found."
                 }
 
-            if not student_has_subject(
+            # ------------------------------------------------
+            # SUBJECT VALIDATION
+            # ------------------------------------------------
+
+            if subject_id is not None:
+
+                if not student_has_subject(
+                    db,
+                    student_id,
+                    subject_id
+                ):
+                    return {
+                        "error":
+                            "This student does not have data for the requested subject."
+                    }
+
+            # ------------------------------------------------
+            # GET ATTENDANCE
+            # ------------------------------------------------
+
+            attendance_data = get_student_attendance(
                 db,
                 student_id,
-                subject_id
-            ):
-                return {
-                    "error":
-                        "This student does not have data for the requested subject."
+                subject_id,
+                allowed_subject_ids
+            )
+
+            # ------------------------------------------------
+            # CALCULATE SUMMARY
+            # ------------------------------------------------
+
+            if "attendance" in attendance_data:
+
+                records = attendance_data["attendance"]
+
+                total_classes = len(records)
+
+                present_classes = sum(
+                    1
+                    for record in records
+                    if record["status"].lower() == "present"
+                )
+
+                attendance_percentage = (
+                    present_classes /
+                    total_classes *
+                    100
+                    if total_classes > 0
+                    else 0
+                )
+
+                attendance_data["summary"] = {
+                    "total_classes":
+                        total_classes,
+
+                    "present_classes":
+                        present_classes,
+
+                    "absent_classes":
+                        total_classes - present_classes,
+
+                    "attendance_percentage":
+                        round(
+                            attendance_percentage,
+                            2
+                        )
                 }
 
-            return get_student_attendance(
-                db,
-                student_id,
-                subject_id
-            )
+            return attendance_data
 
         # ====================================================
         # STUDENT MARKS
@@ -1292,30 +1602,60 @@ def create_ai_tools(
         @tool
         def student_marks(
             student_id: str,
-            subject_id: int
+            subject_id: int | None = None
         ):
             """
-            Get a student's marks for a subject.
+            Get a student's marks.
 
-            Faculty can only access subjects assigned
-            to them.
+            Admin:
+            - Can access all subjects.
+
+            Faculty:
+            - Can access only assigned subjects.
+            - If subject_id is not provided, only assigned
+              subject data is returned.
             """
 
             student_id = student_id.strip()
 
+            allowed_subject_ids = None
+
+            # ------------------------------------------------
+            # FACULTY AUTHORIZATION
+            # ------------------------------------------------
+
             if current_user.role == "faculty":
 
-                allowed = faculty_has_subject_access(
-                    db,
-                    current_user.id,
-                    subject_id
-                )
+                if subject_id is not None:
 
-                if not allowed:
-                    return {
-                        "error":
-                            "Access denied. This subject is not assigned to you."
-                    }
+                    allowed = faculty_has_subject_access(
+                        db,
+                        current_user.id,
+                        subject_id
+                    )
+
+                    if not allowed:
+                        return {
+                            "error":
+                                "Access denied. This subject is not assigned to you."
+                        }
+
+                else:
+
+                    allowed_subject_ids = get_faculty_subject_ids(
+                        db,
+                        current_user.id
+                    )
+
+                    if not allowed_subject_ids:
+                        return {
+                            "error":
+                                "No subjects assigned to this faculty."
+                        }
+
+            # ------------------------------------------------
+            # STUDENT VALIDATION
+            # ------------------------------------------------
 
             student = _get_student(
                 db,
@@ -1328,20 +1668,27 @@ def create_ai_tools(
                         "Student not found."
                 }
 
-            if not student_has_subject(
-                db,
-                student_id,
-                subject_id
-            ):
-                return {
-                    "error":
-                        "This student does not have data for the requested subject."
-                }
+            # ------------------------------------------------
+            # SUBJECT VALIDATION
+            # ------------------------------------------------
+
+            if subject_id is not None:
+
+                if not student_has_subject(
+                    db,
+                    student_id,
+                    subject_id
+                ):
+                    return {
+                        "error":
+                            "This student does not have data for the requested subject."
+                    }
 
             return get_student_marks(
                 db,
                 student_id,
-                subject_id
+                subject_id,
+                allowed_subject_ids
             )
 
         # ====================================================
@@ -1351,30 +1698,60 @@ def create_ai_tools(
         @tool
         def student_risk(
             student_id: str,
-            subject_id: int
+            subject_id: int | None = None
         ):
             """
-            Get a student's risk information for a subject.
+            Get a student's risk information.
 
-            Faculty can only access subjects assigned
-            to them.
+            Admin:
+            - Can access all subjects.
+
+            Faculty:
+            - Can access only assigned subjects.
+            - If subject_id is not provided, only assigned
+              subject data is returned.
             """
 
             student_id = student_id.strip()
 
+            allowed_subject_ids = None
+
+            # ------------------------------------------------
+            # FACULTY AUTHORIZATION
+            # ------------------------------------------------
+
             if current_user.role == "faculty":
 
-                allowed = faculty_has_subject_access(
-                    db,
-                    current_user.id,
-                    subject_id
-                )
+                if subject_id is not None:
 
-                if not allowed:
-                    return {
-                        "error":
-                            "Access denied. This subject is not assigned to you."
-                    }
+                    allowed = faculty_has_subject_access(
+                        db,
+                        current_user.id,
+                        subject_id
+                    )
+
+                    if not allowed:
+                        return {
+                            "error":
+                                "Access denied. This subject is not assigned to you."
+                        }
+
+                else:
+
+                    allowed_subject_ids = get_faculty_subject_ids(
+                        db,
+                        current_user.id
+                    )
+
+                    if not allowed_subject_ids:
+                        return {
+                            "error":
+                                "No subjects assigned to this faculty."
+                        }
+
+            # ------------------------------------------------
+            # STUDENT VALIDATION
+            # ------------------------------------------------
 
             student = _get_student(
                 db,
@@ -1387,20 +1764,27 @@ def create_ai_tools(
                         "Student not found."
                 }
 
-            if not student_has_subject(
-                db,
-                student_id,
-                subject_id
-            ):
-                return {
-                    "error":
-                        "This student does not have data for the requested subject."
-                }
+            # ------------------------------------------------
+            # SUBJECT VALIDATION
+            # ------------------------------------------------
+
+            if subject_id is not None:
+
+                if not student_has_subject(
+                    db,
+                    student_id,
+                    subject_id
+                ):
+                    return {
+                        "error":
+                            "This student does not have data for the requested subject."
+                    }
 
             return get_student_risk(
                 db,
                 student_id,
-                subject_id
+                subject_id,
+                allowed_subject_ids
             )
 
         # ====================================================
@@ -1410,30 +1794,60 @@ def create_ai_tools(
         @tool
         def student_recommendations(
             student_id: str,
-            subject_id: int
+            subject_id: int | None = None
         ):
             """
-            Get a student's recommendations for a subject.
+            Get a student's recommendations.
 
-            Faculty can only access subjects assigned
-            to them.
+            Admin:
+            - Can access all subjects.
+
+            Faculty:
+            - Can access only assigned subjects.
+            - If subject_id is not provided, only assigned
+              subject data is returned.
             """
 
             student_id = student_id.strip()
 
+            allowed_subject_ids = None
+
+            # ------------------------------------------------
+            # FACULTY AUTHORIZATION
+            # ------------------------------------------------
+
             if current_user.role == "faculty":
 
-                allowed = faculty_has_subject_access(
-                    db,
-                    current_user.id,
-                    subject_id
-                )
+                if subject_id is not None:
 
-                if not allowed:
-                    return {
-                        "error":
-                            "Access denied. This subject is not assigned to you."
-                    }
+                    allowed = faculty_has_subject_access(
+                        db,
+                        current_user.id,
+                        subject_id
+                    )
+
+                    if not allowed:
+                        return {
+                            "error":
+                                "Access denied. This subject is not assigned to you."
+                        }
+
+                else:
+
+                    allowed_subject_ids = get_faculty_subject_ids(
+                        db,
+                        current_user.id
+                    )
+
+                    if not allowed_subject_ids:
+                        return {
+                            "error":
+                                "No subjects assigned to this faculty."
+                        }
+
+            # ------------------------------------------------
+            # STUDENT VALIDATION
+            # ------------------------------------------------
 
             student = _get_student(
                 db,
@@ -1446,20 +1860,27 @@ def create_ai_tools(
                         "Student not found."
                 }
 
-            if not student_has_subject(
-                db,
-                student_id,
-                subject_id
-            ):
-                return {
-                    "error":
-                        "This student does not have data for the requested subject."
-                }
+            # ------------------------------------------------
+            # SUBJECT VALIDATION
+            # ------------------------------------------------
+
+            if subject_id is not None:
+
+                if not student_has_subject(
+                    db,
+                    student_id,
+                    subject_id
+                ):
+                    return {
+                        "error":
+                            "This student does not have data for the requested subject."
+                    }
 
             return get_student_recommendations(
                 db,
                 student_id,
-                subject_id
+                subject_id,
+                allowed_subject_ids
             )
 
         # ====================================================
@@ -1467,6 +1888,7 @@ def create_ai_tools(
         # ====================================================
 
         return [
+            find_student,
             find_subject,
             total_students,
             low_attendance_students,
