@@ -920,8 +920,6 @@ class Recommendation(Base):
     )
 
 
-
-
 class StudentMLRecord(Base):
     __tablename__ = "student_ml_records"
 
@@ -939,7 +937,6 @@ class StudentMLRecord(Base):
         nullable=False
     )
 
-    # Previous academic information
     attendance_percentage = Column(
         Integer,
         nullable=False
@@ -960,12 +957,7 @@ class StudentMLRecord(Base):
         nullable=False
     )
 
-    academic_trend = Column(
-        Integer,
-        nullable=False
-    )
 
-    # Future / final performance - ML TARGET
     final_exam_percentage = Column(
         Integer,
         nullable=False
@@ -985,10 +977,5 @@ class StudentMLRecord(Base):
         ),
     )
 
-    student = relationship(
-        "Student"
-    )
-
-    subject = relationship(
-        "Subject"
-    )
+    student = relationship("Student")
+    subject = relationship("Subject")

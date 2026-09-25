@@ -14,7 +14,6 @@ def get_ml_training_data(db: Session):
     2. Internal marks percentage
     3. Assignment percentage
     4. Previous exam percentage
-    5. Academic trend
 
     Target:
     Final exam percentage
@@ -40,8 +39,7 @@ def get_ml_training_data(db: Session):
             record.attendance_percentage,
             record.internal_marks_percentage,
             record.assignment_percentage,
-            record.previous_exam_percentage,
-            record.academic_trend
+            record.previous_exam_percentage
         ])
 
         # -------------------------------

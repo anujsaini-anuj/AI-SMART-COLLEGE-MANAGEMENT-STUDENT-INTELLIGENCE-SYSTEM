@@ -185,8 +185,7 @@ def train_and_save_future_model(db: Session):
             "attendance_percentage",
             "internal_marks_percentage",
             "assignment_percentage",
-            "previous_exam_percentage",
-            "academic_trend"
+            "previous_exam_percentage"
         ],
 
         "target": (
@@ -248,8 +247,7 @@ def predict_future_performance(
     attendance_percentage,
     internal_marks_percentage,
     assignment_percentage,
-    previous_exam_percentage,
-    academic_trend
+    previous_exam_percentage
 ):
     """
     Predict future final exam percentage.
@@ -276,8 +274,7 @@ def predict_future_performance(
             attendance_percentage,
             internal_marks_percentage,
             assignment_percentage,
-            previous_exam_percentage,
-            academic_trend
+            previous_exam_percentage
         ]],
         dtype=float
     )
