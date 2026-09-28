@@ -16,7 +16,7 @@ from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
-from app.database.models import User
+from app.database.models import User, HOD
 
 
 load_dotenv()
@@ -149,3 +149,28 @@ def require_hod(
         )
 
     return current_user
+
+
+
+
+# ==================================================
+# GET CURRENT HOD PROFILE
+# ==================================================
+
+def get_current_hod(
+    current_user: User = Depends(require_hod),
+    db: Session = Depends(get_db)
+):
+
+    hod = db.query(HOD).filter(
+        HOD.user_id == current_user.id
+    ).first()
+
+    if hod is None:
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="HOD profile not found"
+        )
+
+    return hod
