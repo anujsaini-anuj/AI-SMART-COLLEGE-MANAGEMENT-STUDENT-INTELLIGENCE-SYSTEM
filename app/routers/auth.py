@@ -151,7 +151,10 @@ def create_admin(
 # ADMIN CREATES HOD
 # ==================================================
 
-@router.post("/admin/create-hod")
+@router.post(
+    "/admin/create-hod",
+    tags=["HOD Management"]
+)
 def create_hod(
     name: str = Form(...),
     email: str = Form(...),
