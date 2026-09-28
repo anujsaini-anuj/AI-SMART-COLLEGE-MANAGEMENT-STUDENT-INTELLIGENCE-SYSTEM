@@ -134,3 +134,18 @@ def require_student(
         )
 
     return current_user
+
+
+
+def require_hod(
+    current_user: User = Depends(get_current_user)
+):
+
+    if current_user.role != "hod":
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="HOD access required"
+        )
+
+    return current_user
