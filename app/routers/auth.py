@@ -11,7 +11,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
-from app.database.models import User
+from app.database.models import User, HOD
 
 from app.schemas.auth import LoginResponse
 
@@ -143,3 +143,101 @@ def create_admin(
         "role": admin.role
     }
 
+
+
+
+
+# ==================================================
+# ADMIN CREATES HOD
+# ==================================================
+
+@router.post("/admin/create-hod")
+def create_hod(
+    name: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    hod_id: str = Form(...),
+    phone: str = Form(...),
+    department_id: int = Form(...),
+
+    db: Session = Depends(get_db),
+
+    current_admin: User = Depends(require_admin)
+):
+
+    # Check email already exists
+    existing_user = db.query(User).filter(
+        User.email == email
+    ).first()
+
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
+
+    # Check HOD ID already exists
+    existing_hod = db.query(HOD).filter(
+        HOD.hod_id == hod_id
+    ).first()
+
+    if existing_hod:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="HOD ID already exists"
+        )
+
+    # Check department exists
+    from app.database.models import Department
+
+    department = db.query(Department).filter(
+        Department.id == department_id
+    ).first()
+
+    if not department:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Department not found"
+        )
+
+    try:
+
+        # Create HOD User account
+        hod_user = User(
+            name=name,
+            email=email,
+            password_hash=hash_password(password),
+            role="hod"
+        )
+
+        db.add(hod_user)
+        db.flush()
+
+        # Create separate HOD profile
+        hod = HOD(
+            user_id=hod_user.id,
+            hod_id=hod_id,
+            phone=phone,
+            department_id=department_id
+        )
+
+        db.add(hod)
+
+        db.commit()
+
+        db.refresh(hod_user)
+        db.refresh(hod)
+
+        return {
+            "message": "HOD created successfully",
+            "user_id": hod_user.id,
+            "hod_id": hod.hod_id,
+            "name": hod_user.name,
+            "email": hod_user.email,
+            "role": hod_user.role,
+            "department_id": hod.department_id
+        }
+
+    except Exception:
+        db.rollback()
+        raise
