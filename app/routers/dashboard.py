@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database.database import get_db
 from app.database.models import (
+    HOD,
     Student,
     Faculty,
     Course,
@@ -14,7 +15,7 @@ from app.database.models import (
     Prediction,
     Recommendation
 )
-from app.utils.auth import require_admin, require_faculty, require_student
+from app.utils.auth import require_admin, require_faculty, require_student, get_current_hod
 
 
 router = APIRouter(
@@ -477,4 +478,185 @@ def student_dashboard(
             }
             for record in recommendation_records
         ]
+    }
+
+
+
+
+# =========================================================
+# HOD DASHBOARD
+# =========================================================
+
+@router.get("/hod")
+def hod_dashboard(
+    db: Session = Depends(get_db),
+    current_hod: HOD = Depends(get_current_hod)
+):
+
+    department_id = current_hod.department_id
+
+    # =====================================================
+    # TOTAL STUDENTS
+    # =====================================================
+
+    total_students = db.query(Student).filter(
+        Student.department_id == department_id
+    ).count()
+
+    # =====================================================
+    # TOTAL FACULTY
+    # =====================================================
+
+    total_faculty = db.query(Faculty).filter(
+        Faculty.department_id == department_id
+    ).count()
+
+    # =====================================================
+    # AVERAGE ATTENDANCE
+    # =====================================================
+
+    attendance_records = db.query(Attendance).join(
+        Student,
+        Attendance.student_id == Student.student_id
+    ).filter(
+        Student.department_id == department_id
+    ).all()
+
+    if attendance_records:
+
+        present_count = sum(
+            1
+            for record in attendance_records
+            if record.status.lower() == "present"
+        )
+
+        average_attendance = round(
+            (present_count / len(attendance_records)) * 100,
+            2
+        )
+
+    else:
+        average_attendance = 0
+
+    # =====================================================
+    # AVERAGE MARKS
+    # =====================================================
+
+    marks_records = db.query(Marks).join(
+        Student,
+        Marks.student_id == Student.student_id
+    ).filter(
+        Student.department_id == department_id
+    ).all()
+
+    valid_marks_records = [
+        record
+        for record in marks_records
+        if record.max_marks > 0
+    ]
+
+    if valid_marks_records:
+
+        average_marks = round(
+            sum(
+                (record.marks_obtained / record.max_marks) * 100
+                for record in valid_marks_records
+            ) / len(valid_marks_records),
+            2
+        )
+
+    else:
+        average_marks = 0
+
+    # =====================================================
+    # RISK DISTRIBUTION
+    # =====================================================
+
+    risk_records = db.query(StudentRisk).join(
+        Student,
+        StudentRisk.student_id == Student.student_id
+    ).filter(
+        Student.department_id == department_id
+    ).all()
+
+    high_risk = sum(
+        1 for record in risk_records
+        if record.risk_level == "High"
+    )
+
+    medium_risk = sum(
+        1 for record in risk_records
+        if record.risk_level == "Medium"
+    )
+
+    low_risk = sum(
+        1 for record in risk_records
+        if record.risk_level == "Low"
+    )
+
+    # =====================================================
+    # PERFORMANCE DISTRIBUTION
+    # =====================================================
+
+    performance_records = db.query(Performance).join(
+        Student,
+        Performance.student_id == Student.student_id
+    ).filter(
+        Student.department_id == department_id
+    ).all()
+
+    excellent = sum(
+        1 for record in performance_records
+        if record.performance_level == "Excellent"
+    )
+
+    good = sum(
+        1 for record in performance_records
+        if record.performance_level == "Good"
+    )
+
+    average = sum(
+        1 for record in performance_records
+        if record.performance_level == "Average"
+    )
+
+    poor = sum(
+        1 for record in performance_records
+        if record.performance_level == "Poor"
+    )
+
+    # =====================================================
+    # RESPONSE
+    # =====================================================
+
+    return {
+        "dashboard": "HOD Dashboard",
+
+        "department": {
+            "department_id": department_id,
+            "department_name": current_hod.department.name
+        },
+
+        "college_overview": {
+            "total_students": total_students,
+            "total_faculty": total_faculty
+        },
+
+        "academic_overview": {
+            "average_attendance": average_attendance,
+            "average_marks": average_marks
+        },
+
+        "risk_overview": {
+            "high_risk_students": high_risk,
+            "medium_risk_students": medium_risk,
+            "low_risk_students": low_risk
+        },
+
+        "performance_distribution": {
+            "excellent": excellent,
+            "good": good,
+            "average": average,
+            "poor": poor
+        }
     }
