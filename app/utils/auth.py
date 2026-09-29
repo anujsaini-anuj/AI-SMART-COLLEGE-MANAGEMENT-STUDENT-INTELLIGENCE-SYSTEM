@@ -170,6 +170,22 @@ def require_accountant(
     return current_user
 
 
+# ==================================================
+# LIBRARIAN AUTHORIZATION
+# ==================================================
+
+def require_librarian(
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.role != "librarian":
+        raise HTTPException(
+            status_code=403,
+            detail="Only librarian can access this resource"
+        )
+
+    return current_user
+
+
 
 # ==================================================
 # GET CURRENT HOD PROFILE
