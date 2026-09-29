@@ -11,7 +11,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
-from app.database.models import User, HOD
+from app.database.models import User, HOD, Accountant
 
 from app.schemas.auth import LoginResponse
 
@@ -239,6 +239,91 @@ def create_hod(
             "email": hod_user.email,
             "role": hod_user.role,
             "department_id": hod.department_id
+        }
+
+    except Exception:
+        db.rollback()
+        raise
+
+
+
+# ==================================================
+# ADMIN CREATES ACCOUNTANT
+# ==================================================
+
+@router.post(
+    "/admin/create-accountant",
+    tags=["Accountant Management"]
+)
+def create_accountant(
+    name: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    accountant_id: str = Form(...),
+    phone: str = Form(None),
+
+    db: Session = Depends(get_db),
+
+    current_admin: User = Depends(require_admin)
+):
+
+    # Check existing email
+    existing_user = db.query(User).filter(
+        User.email == email
+    ).first()
+
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already registered"
+        )
+
+    # Check existing Accountant ID
+    existing_accountant = db.query(Accountant).filter(
+        Accountant.accountant_id == accountant_id
+    ).first()
+
+    if existing_accountant:
+        raise HTTPException(
+            status_code=400,
+            detail="Accountant ID already exists"
+        )
+
+    try:
+
+        # Create User
+        accountant_user = User(
+            name=name,
+            email=email,
+            password_hash=hash_password(password),
+            role="accountant"
+        )
+
+        db.add(accountant_user)
+        db.flush()
+
+        # Create Accountant Profile
+        accountant = Accountant(
+            user_id=accountant_user.id,
+            accountant_id=accountant_id,
+            phone=phone
+        )
+
+        db.add(accountant)
+
+        db.commit()
+
+        db.refresh(accountant_user)
+        db.refresh(accountant)
+
+        return {
+            "message": "Accountant created successfully",
+            "user_id": accountant_user.id,
+            "accountant_id": accountant.accountant_id,
+            "name": accountant_user.name,
+            "email": accountant_user.email,
+            "phone": accountant.phone,
+            "role": accountant_user.role
         }
 
     except Exception:
