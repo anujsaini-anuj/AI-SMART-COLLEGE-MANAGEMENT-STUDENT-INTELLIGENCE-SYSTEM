@@ -152,6 +152,24 @@ def require_hod(
 
 
 
+# ==================================================
+# REQUIRE ACCOUNTANT
+# ==================================================
+
+def require_accountant(
+    current_user: User = Depends(get_current_user)
+):
+
+    if current_user.role != "accountant":
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accountant access required"
+        )
+
+    return current_user
+
+
 
 # ==================================================
 # GET CURRENT HOD PROFILE
