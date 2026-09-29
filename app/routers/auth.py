@@ -11,8 +11,9 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
-from app.database.models import User, HOD, Accountant
+from app.database.models import User, HOD, Accountant, Librarian
 
+from app.utils.auth import require_admin
 from app.schemas.auth import LoginResponse
 
 from app.utils.security import (
@@ -152,8 +153,7 @@ def create_admin(
 # ==================================================
 
 @router.post(
-    "/admin/create-hod",
-    tags=["HOD Management"]
+    "/admin/create-hod"
 )
 def create_hod(
     name: str = Form(...),
@@ -252,8 +252,7 @@ def create_hod(
 # ==================================================
 
 @router.post(
-    "/admin/create-accountant",
-    tags=["Accountant Management"]
+    "/admin/create-accountant"
 )
 def create_accountant(
     name: str = Form(...),
@@ -324,6 +323,91 @@ def create_accountant(
             "email": accountant_user.email,
             "phone": accountant.phone,
             "role": accountant_user.role
+        }
+
+    except Exception:
+        db.rollback()
+        raise
+
+
+
+
+# ==================================================
+# ADMIN CREATES LIBRARIAN
+# ==================================================
+
+@router.post(
+    "/admin/create-librarian"
+)
+def create_librarian(
+    name: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    librarian_id: str = Form(...),
+    phone: str = Form(None),
+
+    db: Session = Depends(get_db),
+
+    current_admin: User = Depends(require_admin)
+):
+
+    # Check existing email
+    existing_user = db.query(User).filter(
+        User.email == email
+    ).first()
+
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already registered"
+        )
+
+    # Check existing Librarian ID
+    existing_librarian = db.query(Librarian).filter(
+        Librarian.librarian_id == librarian_id
+    ).first()
+
+    if existing_librarian:
+        raise HTTPException(
+            status_code=400,
+            detail="Librarian ID already exists"
+        )
+
+    try:
+
+        # Create User account
+        librarian_user = User(
+            name=name,
+            email=email,
+            password_hash=hash_password(password),
+            role="librarian"
+        )
+
+        db.add(librarian_user)
+        db.flush()
+
+        # Create Librarian Profile
+        librarian = Librarian(
+            user_id=librarian_user.id,
+            librarian_id=librarian_id,
+            phone=phone
+        )
+
+        db.add(librarian)
+
+        db.commit()
+
+        db.refresh(librarian_user)
+        db.refresh(librarian)
+
+        return {
+            "message": "Librarian created successfully",
+            "user_id": librarian_user.id,
+            "librarian_id": librarian.librarian_id,
+            "name": librarian_user.name,
+            "email": librarian_user.email,
+            "phone": librarian.phone,
+            "role": librarian_user.role
         }
 
     except Exception:

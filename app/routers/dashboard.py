@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+
 
 from app.database.database import get_db
 from app.database.models import (
@@ -17,6 +18,11 @@ from app.database.models import (
 )
 from app.utils.auth import require_admin, require_faculty, require_student, get_current_hod
 
+from app.database.models import Book, BookCopy, BookIssue
+from app.utils.auth import require_librarian, require_accountant
+from sqlalchemy import func
+
+from app.database.models import Librarian, LibraryFinePayment, LibraryFine, Accountant, StudentFee,  FeePayment
 
 router = APIRouter(
     prefix="/dashboard",
@@ -658,5 +664,241 @@ def hod_dashboard(
             "good": good,
             "average": average,
             "poor": poor
+        }
+    }
+
+
+
+
+
+# =========================================================
+# LIBRARIAN DASHBOARD
+# =========================================================
+
+@router.get("/librarian")
+def librarian_dashboard(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_librarian)
+):
+
+    # Get librarian profile
+    librarian = db.query(Librarian).filter(
+        Librarian.user_id == current_user.id
+    ).first()
+
+    if not librarian:
+        raise HTTPException(
+            status_code=404,
+            detail="Librarian profile not found"
+        )
+
+    # =====================================================
+    # BOOK OVERVIEW
+    # =====================================================
+
+    total_books = db.query(Book).count()
+
+    total_copies = db.query(BookCopy).count()
+
+    available_copies = db.query(BookCopy).filter(
+        BookCopy.status == "available"
+    ).count()
+
+    issued_copies = db.query(BookCopy).filter(
+        BookCopy.status == "issued"
+    ).count()
+
+    # =====================================================
+    # ISSUE OVERVIEW
+    # =====================================================
+
+    total_issues = db.query(BookIssue).count()
+
+    active_issues = db.query(BookIssue).filter(
+        BookIssue.status == "issued"
+    ).count()
+
+    returned_books = db.query(BookIssue).filter(
+        BookIssue.status == "returned"
+    ).count()
+
+    # =====================================================
+    # LIBRARY FINE OVERVIEW
+    # =====================================================
+
+    fines = db.query(LibraryFine).all()
+
+    total_assessed_fines = len(fines)
+
+    total_fine_amount = sum(
+        fine.fine_amount
+        for fine in fines
+    )
+
+    total_collected_fine = 0
+    total_pending_fine = 0
+
+    paid_fines = 0
+    pending_fines = 0
+
+    for fine in fines:
+
+        payment = db.query(LibraryFinePayment).filter(
+            LibraryFinePayment.issue_id == fine.issue_id
+        ).first()
+
+        if payment:
+            total_collected_fine += payment.amount
+            paid_fines += 1
+
+        else:
+            total_pending_fine += fine.fine_amount
+            pending_fines += 1
+
+    # =====================================================
+    # RESPONSE
+    # =====================================================
+
+    return {
+        "dashboard": "Librarian Dashboard",
+
+        "librarian": {
+            "librarian_id": librarian.librarian_id,
+            "librarian_name": current_user.name
+        },
+
+        "book_overview": {
+            "total_books": total_books,
+            "total_physical_copies": total_copies,
+            "available_copies": available_copies,
+            "issued_copies": issued_copies
+        },
+
+        "issue_overview": {
+            "total_transactions": total_issues,
+            "currently_issued": active_issues,
+            "returned_books": returned_books
+        },
+
+        "fine_overview": {
+            "total_assessed_fines": total_assessed_fines,
+            "total_fine_amount": total_fine_amount,
+            "total_collected_fine": total_collected_fine,
+            "total_pending_fine": total_pending_fine,
+            "paid_fines": paid_fines,
+            "pending_fines": pending_fines
+        }
+    }
+
+
+
+
+
+# =========================================================
+# ACCOUNTANT DASHBOARD
+# =========================================================
+
+@router.get("/accountant")
+def accountant_dashboard(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_accountant)
+):
+
+    # =====================================================
+    # ACCOUNTANT PROFILE
+    # =====================================================
+
+    accountant = db.query(Accountant).filter(
+        Accountant.user_id == current_user.id
+    ).first()
+
+    if not accountant:
+        raise HTTPException(
+            status_code=404,
+            detail="Accountant profile not found"
+        )
+
+    # =====================================================
+    # COLLEGE FEE OVERVIEW
+    # =====================================================
+
+    fee_records = db.query(StudentFee).all()
+
+    total_fee_amount = sum(
+        fee.total_fee
+        for fee in fee_records
+    )
+
+    total_fee_collected = sum(
+        fee.paid_amount
+        for fee in fee_records
+    )
+
+    total_pending_fee = sum(
+        fee.pending_amount
+        for fee in fee_records
+    )
+
+    # =====================================================
+    # LIBRARY FINE OVERVIEW
+    # =====================================================
+
+    fines = db.query(LibraryFine).all()
+
+    total_fines = len(fines)
+
+    total_assessed_fine = sum(
+        fine.fine_amount
+        for fine in fines
+    )
+
+    total_collected_fine = 0
+    total_pending_fine = 0
+
+    paid_fines = 0
+    pending_fines = 0
+
+    for fine in fines:
+
+        payment = db.query(LibraryFinePayment).filter(
+            LibraryFinePayment.issue_id == fine.issue_id
+        ).first()
+
+        if payment:
+
+            total_collected_fine += payment.amount
+            paid_fines += 1
+
+        else:
+
+            total_pending_fine += fine.fine_amount
+            pending_fines += 1
+
+    # =====================================================
+    # RESPONSE
+    # =====================================================
+
+    return {
+        "dashboard": "Accountant Dashboard",
+
+        "accountant": {
+            "accountant_id": accountant.accountant_id,
+            "accountant_name": current_user.name
+        },
+
+        "college_fee_overview": {
+            "total_fee_records": len(fee_records),
+            "total_fee_amount": total_fee_amount,
+            "total_fee_collected": total_fee_collected,
+            "total_pending_fee": total_pending_fee
+        },
+
+        "library_fine_overview": {
+            "total_fines": total_fines,
+            "total_assessed_fine": total_assessed_fine,
+            "total_collected_fine": total_collected_fine,
+            "total_pending_fine": total_pending_fine,
+            "paid_fines": paid_fines,
+            "pending_fines": pending_fines
         }
     }

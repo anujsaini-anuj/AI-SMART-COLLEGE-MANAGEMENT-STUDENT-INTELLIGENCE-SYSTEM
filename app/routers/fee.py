@@ -3,7 +3,10 @@ from sqlalchemy.orm import Session
 
 from app.database.database import get_db
 from app.database.models import FeeStructure, Course, User, Student, StudentFee, FeePayment, FeeRefund
-from app.utils.auth import require_admin, get_current_user, require_student
+from app.utils.auth import require_admin, get_current_user, require_student,  require_accountant
+
+from uuid import uuid4
+from app.database.models import LibraryFinePayment, LibraryFine
 
 
 router = APIRouter(
@@ -961,4 +964,237 @@ def get_my_refunds(
         "total_refunded_amount": total_refunded,
         "refund_history": refund_history,
         "message": "Your refund history retrieved successfully"
+    }
+
+# ==================================================
+# RECEIVE LIBRARY FINE PAYMENT
+# ACCOUNTANT ONLY
+# FULL PAYMENT ONLY
+# ==================================================
+
+@router.post("/library-fines/payment")
+def receive_library_fine_payment(
+    fine_id: int = Form(...),
+    payment_mode: str = Form(...),
+    remarks: str = Form(None),
+
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_accountant)
+):
+
+    # Validate payment mode
+    allowed_modes = [
+        "cash",
+        "upi",
+        "bank_transfer",
+        "card"
+    ]
+
+    payment_mode = payment_mode.strip().lower()
+
+    if payment_mode not in allowed_modes:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid payment mode. Allowed: cash, upi, bank_transfer, card"
+        )
+
+    # Get and lock fine record
+    fine = (
+        db.query(LibraryFine)
+        .filter(LibraryFine.id == fine_id)
+        .with_for_update()
+        .first()
+    )
+
+    if not fine:
+        raise HTTPException(
+            status_code=404,
+            detail="Library fine not found."
+        )
+
+    # Check fine status
+    if fine.status != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail="This fine is not pending for payment."
+        )
+
+    # Check existing payment
+    existing_payment = (
+        db.query(LibraryFinePayment)
+        .filter(
+            LibraryFinePayment.issue_id == fine.issue_id
+        )
+        .first()
+    )
+
+    if existing_payment:
+        raise HTTPException(
+            status_code=400,
+            detail="Payment already recorded for this fine."
+        )
+
+    try:
+
+        # Generate unique receipt number
+        receipt_number = f"LIBF-{uuid4().hex[:12].upper()}"
+
+        # Record full fine payment
+        payment = LibraryFinePayment(
+            issue_id=fine.issue_id,
+            amount=fine.fine_amount,
+            payment_mode=payment_mode,
+            receipt_number=receipt_number,
+            received_by=current_user.id,
+            remarks=remarks
+        )
+
+        # Update fine status
+        fine.status = "paid"
+
+        db.add(payment)
+
+        db.commit()
+
+        db.refresh(payment)
+        db.refresh(fine)
+
+        return {
+            "message": "Library fine paid successfully.",
+            "fine_id": fine.id,
+            "issue_id": fine.issue_id,
+            "student_id": fine.student.student_id,
+            "student_name": fine.student.name,
+
+            "total_fine": fine.fine_amount,
+            "amount_paid": payment.amount,
+            "pending_amount": 0,
+
+            "payment_mode": payment.payment_mode,
+            "receipt_number": payment.receipt_number,
+            "payment_status": fine.status,
+
+            "received_by": current_user.name,
+            "paid_at": payment.paid_at
+        }
+
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.get("/my-library-fines")
+def get_my_library_fines(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_student)
+):
+
+    student = (
+        db.query(Student)
+        .filter(Student.user_id == current_user.id)
+        .first()
+    )
+
+    if not student:
+        raise HTTPException(
+            status_code=404,
+            detail="Student profile not found."
+        )
+
+    fines = (
+        db.query(LibraryFine)
+        .filter(LibraryFine.student_id == student.id)
+        .all()
+    )
+
+    result = []
+
+    total_fine = 0
+    total_paid = 0
+    total_pending = 0
+
+    for fine in fines:
+
+        payment = (
+            db.query(LibraryFinePayment)
+            .filter(LibraryFinePayment.issue_id == fine.issue_id)
+            .first()
+        )
+
+        paid_amount = payment.amount if payment else 0
+
+        total_fine += fine.fine_amount
+        total_paid += paid_amount
+
+        if fine.status == "pending":
+            total_pending += fine.fine_amount
+
+        result.append({
+            "fine_id": fine.id,
+            "issue_id": fine.issue_id,
+            "fine_amount": fine.fine_amount,
+            "reason": fine.reason,
+            "status": fine.status,
+            "paid_amount": paid_amount,
+            "receipt_number": payment.receipt_number if payment else None,
+            "payment_mode": payment.payment_mode if payment else None,
+            "paid_at": payment.paid_at if payment else None
+        })
+
+    return {
+        "student_id": student.student_id,
+        "student_name": student.name,
+        "total_fine": total_fine,
+        "total_paid": total_paid,
+        "total_pending": total_pending,
+        "fines": result
+    }
+
+
+
+
+
+@router.get("/library-fines/report")
+def library_fine_report(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_accountant)
+):
+
+    fines = db.query(LibraryFine).all()
+
+    total_fines = len(fines)
+    total_assessed = 0
+    total_collected = 0
+    total_pending = 0
+    paid_count = 0
+    pending_count = 0
+
+    for fine in fines:
+
+        total_assessed += fine.fine_amount
+
+        payment = (
+            db.query(LibraryFinePayment)
+            .filter(
+                LibraryFinePayment.issue_id == fine.issue_id
+            )
+            .first()
+        )
+
+        if payment:
+            total_collected += payment.amount
+            paid_count += 1
+
+        else:
+            total_pending += fine.fine_amount
+            pending_count += 1
+
+    return {
+        "report": "Library Fine Collection Report",
+        "total_fine_records": total_fines,
+        "total_assessed_amount": total_assessed,
+        "total_collected_amount": total_collected,
+        "total_pending_amount": total_pending,
+        "paid_fines": paid_count,
+        "pending_fines": pending_count
     }

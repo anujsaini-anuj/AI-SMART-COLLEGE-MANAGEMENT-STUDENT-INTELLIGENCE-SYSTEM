@@ -7,7 +7,9 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Date,
-    UniqueConstraint
+    UniqueConstraint,
+    Index,
+    text
 )
 
 from sqlalchemy.orm import relationship
@@ -190,6 +192,319 @@ class Librarian(Base):
     user = relationship("User")
 
 
+# ==================================================
+# BOOK
+# ==================================================
+
+class Book(Base):
+
+    __tablename__ = "books"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    title = Column(
+        String(200),
+        nullable=False
+    )
+
+    author = Column(
+        String(100),
+        nullable=False
+    )
+
+    isbn = Column(
+        String(20),
+        unique=True,
+        nullable=False
+    )
+
+    publisher = Column(
+        String(150),
+        nullable=True
+    )
+
+    edition = Column(
+        String(50),
+        nullable=True
+    )
+
+    publication_year = Column(
+        Integer,
+        nullable=True
+    )
+
+    category = Column(
+        String(100),
+        nullable=False
+    )
+
+    language = Column(
+        String(50),
+        default="English",
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+
+
+
+# ==================================================
+# BOOK COPY / INVENTORY
+# ==================================================
+
+class BookCopy(Base):
+
+    __tablename__ = "book_copies"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    book_id = Column(
+        Integer,
+        ForeignKey("books.id"),
+        nullable=False
+    )
+
+    accession_number = Column(
+        String(50),
+        unique=True,
+        index=True,
+        nullable=False
+    )
+
+    status = Column(
+        String(20),
+        nullable=False,
+        default="available"
+    )
+
+    condition = Column(
+        String(30),
+        nullable=False,
+        default="good"
+    )
+
+    acquired_date = Column(
+        Date,
+        nullable=True
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    book = relationship("Book")
+
+
+
+# ==================================================
+# BOOK ISSUE
+# ==================================================
+
+class BookIssue(Base):
+
+    __tablename__ = "book_issues"
+
+
+    __table_args__ = (
+        Index(
+            "uq_active_book_copy_issue",
+            "book_copy_id",
+            unique=True,
+            postgresql_where=text("status = 'issued'")
+        ),
+    )
+
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    student_id = Column(
+        String(50),
+        ForeignKey("students.student_id"),
+        nullable=False
+    )
+
+    book_copy_id = Column(
+        Integer,
+        ForeignKey("book_copies.id"),
+        nullable=False
+    )
+
+    issue_date = Column(
+        Date,
+        nullable=False
+    )
+
+    due_date = Column(
+        Date,
+        nullable=False
+    )
+
+    return_date = Column(
+        Date,
+        nullable=True
+    )
+
+    status = Column(
+        String(20),
+        nullable=False,
+        default="issued"
+    )
+
+    fine_amount = Column(
+        Integer,
+        nullable=False,
+        default=0
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    student = relationship("Student")
+
+    book_copy = relationship("BookCopy")
+
+
+# ==================================================
+# LIBRARY FINE PAYMENT
+# ==================================================
+
+class LibraryFinePayment(Base):
+
+    __tablename__ = "library_fine_payments"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    issue_id = Column(
+        Integer,
+        ForeignKey("book_issues.id"),
+        nullable=False,
+        index=True
+    )
+
+    amount = Column(
+        Integer,
+        nullable=False
+    )
+
+    payment_mode = Column(
+        String(20),
+        nullable=False
+    )
+
+    receipt_number = Column(
+        String(50),
+        unique=True,
+        nullable=False,
+        index=True
+    )
+
+    received_by = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False
+    )
+
+    remarks = Column(
+        String(255),
+        nullable=True
+    )
+
+    paid_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    issue = relationship("BookIssue")
+
+    receiver = relationship("User")
+
+
+
+# ==================================================
+# LIBRARY FINE
+# ==================================================
+
+class LibraryFine(Base):
+
+    __tablename__ = "library_fines"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    issue_id = Column(
+        Integer,
+        ForeignKey("book_issues.id"),
+        unique=True,
+        nullable=False
+    )
+
+    student_id = Column(
+        String(50),
+        ForeignKey("students.student_id"),
+        nullable=False
+    )
+
+    fine_amount = Column(
+        Integer,
+        nullable=False
+    )
+
+    reason = Column(
+        String(255),
+        nullable=False
+    )
+
+    status = Column(
+        String(20),
+        default="pending",
+        nullable=False
+    )
+
+    forwarded_by = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False
+    )
+
+    forwarded_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    issue = relationship("BookIssue")
+    student = relationship("Student")
+    librarian = relationship("User")
 
 # ==================================================
 # FEE STRUCTURE
