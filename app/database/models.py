@@ -149,6 +149,59 @@ class Accountant(Base):
 
 
 # ==================================================
+# FEE STRUCTURE
+# ==================================================
+
+class FeeStructure(Base):
+
+    __tablename__ = "fee_structures"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    course_id = Column(
+        Integer,
+        ForeignKey("courses.id"),
+        nullable=False
+    )
+
+    semester = Column(
+        Integer,
+        nullable=False
+    )
+
+    academic_year = Column(
+        String(20),
+        nullable=False
+    )
+
+    total_fee = Column(
+        Integer,
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    course = relationship("Course")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "course_id",
+            "semester",
+            "academic_year",
+            name="unique_course_semester_academic_year"
+        ),
+    )
+
+
+# ==================================================
 # DEPARTMENT
 # ==================================================
 
