@@ -201,6 +201,186 @@ class FeeStructure(Base):
     )
 
 
+
+
+# ==================================================
+# STUDENT FEE
+# ==================================================
+
+class StudentFee(Base):
+
+    __tablename__ = "student_fees"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    student_id = Column(
+        Integer,
+        ForeignKey("students.id"),
+        nullable=False
+    )
+
+    fee_structure_id = Column(
+        Integer,
+        ForeignKey("fee_structures.id"),
+        nullable=False
+    )
+
+    total_fee = Column(
+        Integer,
+        nullable=False
+    )
+
+    paid_amount = Column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+
+    pending_amount = Column(
+        Integer,
+        nullable=False
+    )
+
+    payment_status = Column(
+        String(20),
+        default="pending",
+        nullable=False
+    )
+
+    academic_year = Column(
+        String(20),
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    student = relationship("Student")
+
+    fee_structure = relationship("FeeStructure")
+
+
+
+# ==================================================
+# FEE PAYMENT
+# ==================================================
+
+class FeePayment(Base):
+
+    __tablename__ = "fee_payments"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    student_fee_id = Column(
+        Integer,
+        ForeignKey("student_fees.id"),
+        nullable=False
+    )
+
+    amount = Column(
+        Integer,
+        nullable=False
+    )
+
+    payment_method = Column(
+        String(30),
+        nullable=False
+    )
+
+    transaction_id = Column(
+        String(100),
+        unique=True,
+        nullable=True
+    )
+
+    receipt_number = Column(
+        String(50),
+        unique=True,
+        nullable=False
+    )
+
+    payment_date = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    received_by = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False
+    )
+
+    student_fee = relationship("StudentFee")
+
+    accountant = relationship("User")
+
+
+# ==================================================
+# FEE REFUND
+# ==================================================
+
+class FeeRefund(Base):
+
+    __tablename__ = "fee_refunds"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    student_fee_id = Column(
+        Integer,
+        ForeignKey("student_fees.id"),
+        nullable=False
+    )
+
+    amount = Column(
+        Integer,
+        nullable=False
+    )
+
+    reason = Column(
+        String(255),
+        nullable=False
+    )
+
+    refund_status = Column(
+        String(20),
+        default="processed",
+        nullable=False
+    )
+
+    refund_date = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    processed_by = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False
+    )
+
+    student_fee = relationship("StudentFee")
+
+    accountant = relationship("User")
+
+
+
 # ==================================================
 # DEPARTMENT
 # ==================================================
