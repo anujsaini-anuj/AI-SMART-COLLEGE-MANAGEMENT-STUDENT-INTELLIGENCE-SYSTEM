@@ -104,6 +104,50 @@ class HOD(Base):
     department = relationship("Department")
 
 
+
+# ==================================================
+# ACCOUNTANT
+# ==================================================
+
+class Accountant(Base):
+
+    __tablename__ = "accountants"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        unique=True,
+        nullable=False
+    )
+
+    accountant_id = Column(
+        String(50),
+        unique=True,
+        index=True,
+        nullable=False
+    )
+
+    phone = Column(
+        String(15),
+        nullable=True
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    user = relationship("User")
+
+
+
 # ==================================================
 # DEPARTMENT
 # ==================================================
