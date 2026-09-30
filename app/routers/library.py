@@ -383,7 +383,7 @@ def return_book(
             detail="Book has already been returned"
         )
 
-    # Find student using internal database ID
+    # Find student using official Student ID
     student = db.query(Student).filter(
         Student.student_id == book_issue.student_id
     ).first()
@@ -477,8 +477,8 @@ def get_student_library_history(
             status_code=404,
             detail="Student not found"
         )
-
-    # Get student's issue history using internal database ID
+    
+    # Get student's issue history using official Student ID
     issues = db.query(BookIssue).filter(
         BookIssue.student_id == student.student_id
     ).order_by(BookIssue.id.desc()).all()

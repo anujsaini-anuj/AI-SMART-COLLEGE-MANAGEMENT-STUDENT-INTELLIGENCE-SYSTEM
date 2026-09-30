@@ -576,8 +576,8 @@ class StudentFee(Base):
     )
 
     student_id = Column(
-        Integer,
-        ForeignKey("students.id"),
+        String(50),
+        ForeignKey("students.student_id"),
         nullable=False
     )
 

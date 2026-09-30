@@ -151,7 +151,7 @@ def get_fee_structures(
 
 @router.post("/student/assign")
 def assign_student_fee(
-    student_id: int = Form(...),
+    student_id: str = Form(...),
     fee_structure_id: int = Form(...),
 
     db: Session = Depends(get_db),
@@ -167,7 +167,7 @@ def assign_student_fee(
 
     # Check student
     student = db.query(Student).filter(
-        Student.id == student_id
+        Student.student_id == student_id.strip()
     ).first()
 
     if not student:
@@ -196,7 +196,7 @@ def assign_student_fee(
 
     # Check duplicate assignment
     existing_fee = db.query(StudentFee).filter(
-        StudentFee.student_id == student_id,
+        StudentFee.student_id == student.student_id,
         StudentFee.fee_structure_id == fee_structure_id
     ).first()
 
@@ -209,7 +209,7 @@ def assign_student_fee(
     try:
 
         new_student_fee = StudentFee(
-            student_id=student_id,
+            student_id=student.student_id,
             fee_structure_id=fee_structure_id,
             total_fee=fee_structure.total_fee,
             paid_amount=0,
@@ -225,7 +225,8 @@ def assign_student_fee(
         return {
             "message": "Student fee assigned successfully",
             "student_fee_id": new_student_fee.id,
-            "student_id": student.id,
+            "student_id": student.student_id,
+            "student_database_id": student.id,
             "student_name": student.name,
             "fee_structure_id": fee_structure.id,
             "course_id": fee_structure.course_id,
@@ -331,7 +332,7 @@ def record_fee_payment(
     try:
 
         # Generate receipt number
-        receipt_number = f"FEE-{student_fee.id}-{student_fee.paid_amount + amount}"
+        receipt_number = f"FEE-{uuid4().hex[:12].upper()}"
 
         # Create payment record
         new_payment = FeePayment(
@@ -438,7 +439,8 @@ def get_payment_history(
 
     return {
         "student_fee_id": student_fee.id,
-        "student_id": student_fee.student_id,
+        "student_id": student_fee.student.student_id,
+        "student_database_id": student_fee.student.id,
         "total_fee": student_fee.total_fee,
         "paid_amount": student_fee.paid_amount,
         "pending_amount": student_fee.pending_amount,
@@ -480,27 +482,48 @@ def get_payment_receipt(
             detail="Payment not found"
         )
 
+
     # Get student fee
     student_fee = db.query(StudentFee).filter(
         StudentFee.id == payment.student_fee_id
     ).first()
 
+    if not student_fee:
+        raise HTTPException(
+            status_code=404,
+            detail="Student fee record not found"
+        )
+
     # Get student
     student = db.query(Student).filter(
-        Student.id == student_fee.student_id
+        Student.student_id == student_fee.student_id
     ).first()
+
+    if not student:
+        raise HTTPException(
+            status_code=404,
+            detail="Student record not found"
+        )
 
     # Get accountant
     accountant = db.query(User).filter(
         User.id == payment.received_by
     ).first()
 
+    if not accountant:
+        raise HTTPException(
+            status_code=404,
+            detail="Accountant record not found"
+        )
+
+
     return {
         "receipt_number": payment.receipt_number,
         "payment_id": payment.id,
 
         "student_details": {
-            "student_id": student.id,
+            "student_id": student.student_id,
+            "student_database_id": student.id,
             "student_name": student.name
         },
 
@@ -559,12 +582,20 @@ def get_pending_fees(
     for fee in pending_fees:
 
         student = db.query(Student).filter(
-            Student.id == fee.student_id
+            Student.student_id  == fee.student_id
         ).first()
+
+
+        if not student:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Student not found for fee record {fee.id}"
+            )
 
         result.append({
             "student_fee_id": fee.id,
-            "student_id": student.id,
+            "student_id": student.student_id,
+            "student_database_id": student.id,
             "student_name": student.name,
             "fee_structure_id": fee.fee_structure_id,
             "total_fee": fee.total_fee,
@@ -665,7 +696,7 @@ def get_my_fees(
 
     # Get only logged-in student's fee records
     fee_records = db.query(StudentFee).filter(
-        StudentFee.student_id == student.id
+        StudentFee.student_id == student.student_id
     ).all()
 
     if not fee_records:
@@ -682,9 +713,23 @@ def get_my_fees(
             FeeStructure.id == fee.fee_structure_id
         ).first()
 
+
+        if not fee_structure:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Fee structure not found for fee record {fee.id}"
+            )
+
         course = db.query(Course).filter(
             Course.id == fee_structure.course_id
         ).first()
+
+
+        if not course:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Course not found for fee structure {fee_structure.id}"
+            )
 
         payments = db.query(FeePayment).filter(
             FeePayment.student_fee_id == fee.id
@@ -716,7 +761,8 @@ def get_my_fees(
         })
 
     return {
-        "student_id": student.id,
+        "student_id": student.student_id,
+        "student_database_id": student.id,
         "student_name": student.name,
         "total_fee_records": len(fee_details),
         "fee_details": fee_details,
@@ -893,7 +939,22 @@ def get_refund_history(
         refund.amount for refund in refunds
     )
 
+    student = db.query(Student).filter(
+        Student.student_id  == student_fee.student_id
+    ).first()
+
+
+    if not student:
+        raise HTTPException(
+            status_code=404,
+            detail="Student record not found for this fee"
+        )
+
+
     return {
+        "student_id": student.student_id,
+        "student_database_id": student.id,
+        "student_name": student.name,
         "student_fee_id": student_fee.id,
         "total_refunds": len(refund_records),
         "total_refunded_amount": total_refunded,
@@ -930,7 +991,7 @@ def get_my_refunds(
 
     # Get student's fee records
     fee_records = db.query(StudentFee).filter(
-        StudentFee.student_id == student.id
+        StudentFee.student_id == student.student_id
     ).all()
 
     fee_ids = [fee.id for fee in fee_records]
@@ -958,7 +1019,8 @@ def get_my_refunds(
     )
 
     return {
-        "student_id": student.id,
+        "student_id": student.student_id,
+        "student_database_id": student.id,
         "student_name": student.name,
         "total_refunds": len(refund_history),
         "total_refunded_amount": total_refunded,
@@ -1103,7 +1165,7 @@ def get_my_library_fines(
 
     fines = (
         db.query(LibraryFine)
-        .filter(LibraryFine.student_id == student.id)
+        .filter(LibraryFine.student_id == student.student_id)
         .all()
     )
 
