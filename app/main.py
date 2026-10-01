@@ -2,8 +2,10 @@ from fastapi import FastAPI
 
 from app.database.database import Base, engine
 
+import app.database.models
 
 from app.routers.auth import router as auth_router
+from app.routers.admission import router as admission_router
 from app.routers.fee import router as fee_router
 from app.routers.library import router as library_router
 from app.routers.hod import router as hod_router
@@ -42,6 +44,7 @@ def root():
 
 
 app.include_router(auth_router)
+app.include_router(admission_router)
 app.include_router(fee_router)
 app.include_router(library_router)
 app.include_router(hod_router)

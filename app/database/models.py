@@ -8,7 +8,10 @@ from sqlalchemy import (
     ForeignKey,
     Date,
     UniqueConstraint,
+    CheckConstraint,
+    Float,
     Index,
+    Boolean,
     text
 )
 
@@ -60,7 +63,258 @@ class User(Base):
         nullable=False
     )
 
+    is_active = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true"
+    )
 
+
+# ==================================================
+# ADMISSION OFFICER
+# ==================================================
+
+class AdmissionOfficer(Base):
+
+    __tablename__ = "admission_officers"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        unique=True,
+        nullable=False
+    )
+
+    admission_officer_id = Column(
+        String(50),
+        unique=True,
+        index=True,
+        nullable=False
+    )
+
+    phone = Column(
+        String(15),
+        nullable=True
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    user = relationship("User")
+
+
+class AdmissionApplication(Base):
+
+    __tablename__ = "admission_applications"
+
+    __table_args__ = (
+        CheckConstraint(
+            "status = 'enrolled'",
+            name="check_admission_application_status"
+        ),
+    )
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    application_number = Column(
+        String(30),
+        unique=True,
+        index=True,
+        nullable=False
+    )
+
+    # =====================================
+    # PERSONAL INFORMATION
+    # =====================================
+
+    applicant_name = Column(
+        String(100),
+        nullable=False
+    )
+
+    email = Column(
+        String(150),
+        nullable=False,
+        index=True
+    )
+
+    phone = Column(
+        String(16),
+        nullable=False
+    )
+
+    date_of_birth = Column(
+        Date,
+        nullable=True
+    )
+
+    gender = Column(
+        String(20),
+        nullable=True
+    )
+
+    blood_group = Column(
+        String(5),
+        nullable=True
+    )
+
+    category = Column(
+        String(30),
+        nullable=True
+    )
+
+    nationality = Column(
+        String(50),
+        nullable=True
+    )
+
+    # =====================================
+    # PARENT INFORMATION
+    # =====================================
+
+    father_name = Column(
+        String(100),
+        nullable=True
+    )
+
+    mother_name = Column(
+        String(100),
+        nullable=True
+    )
+
+    # =====================================
+    # ADDRESS INFORMATION
+    # =====================================
+
+    address = Column(
+        String(300),
+        nullable=True
+    )
+
+    city = Column(
+        String(100),
+        nullable=True
+    )
+
+    state = Column(
+        String(100),
+        nullable=True
+    )
+
+    postal_code = Column(
+        String(10),
+        nullable=True
+    )
+
+    # =====================================
+    # ACADEMIC INFORMATION
+    # =====================================
+
+    previous_qualification = Column(
+        String(100),
+        nullable=False
+    )
+
+    previous_percentage = Column(
+        Float,
+        nullable=False
+    )
+
+    previous_board = Column(
+        String(100),
+        nullable=True
+    )
+
+    passing_year = Column(
+        Integer,
+        nullable=True
+    )
+
+    course_id = Column(
+        Integer,
+        ForeignKey("courses.id"),
+        nullable=False
+    )
+
+    academic_year = Column(
+        String(20),
+        nullable=False
+    )
+
+    # =====================================
+    # ENROLLMENT INFORMATION
+    # =====================================
+
+    status = Column(
+        String(20),
+        nullable=False,
+        default="enrolled",
+        server_default="enrolled"
+    )
+
+    admitted_by = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=True
+    )
+
+    admission_remarks = Column(
+        String(500),
+        nullable=True
+    )
+
+    enrolled_student_id = Column(
+        String(50),
+        ForeignKey("students.student_id"),
+        nullable=True
+    )
+
+    # =====================================
+    # TIMESTAMPS
+    # =====================================
+
+    submitted_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    # =====================================
+    # RELATIONSHIPS
+    # =====================================
+
+    course = relationship("Course")
+
+    admitted_by_user = relationship(
+        "User",
+        foreign_keys=[admitted_by]
+    )
+
+    enrolled_student = relationship(
+        "Student",
+        foreign_keys=[enrolled_student_id]
+    )
 
 # ==================================================
 # HOD
@@ -996,6 +1250,14 @@ class Student(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False
+    )
+
+
+    is_active = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true"
     )
 
     # Student → User

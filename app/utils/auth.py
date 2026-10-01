@@ -80,15 +80,28 @@ def get_current_user(
         if user_id is None:
             raise credentials_exception
 
-    except (JWTError, ValueError):
+        user_id = int(user_id)
+
+    except (JWTError, ValueError, TypeError):
         raise credentials_exception
 
     user = db.query(User).filter(
-        User.id == int(user_id)
+        User.id == user_id
     ).first()
 
     if user is None:
         raise credentials_exception
+
+    # -----------------------------------------
+    # CHECK ACCOUNT STATUS
+    # -----------------------------------------
+
+    if not user.is_active:
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account is deactivated. Please contact college administration."
+        )
 
     return user
 

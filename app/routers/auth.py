@@ -11,9 +11,8 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
-from app.database.models import User, HOD, Accountant, Librarian
+from app.database.models import User, HOD, Accountant, Librarian, AdmissionOfficer
 
-from app.utils.auth import require_admin
 from app.schemas.auth import LoginResponse
 
 from app.utils.security import (
@@ -71,6 +70,17 @@ def login(
                 "WWW-Authenticate": "Bearer"
             }
         )
+
+    # -----------------------------------------
+    # CHECK ACCOUNT STATUS
+    # -----------------------------------------
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account is deactivated. Please contact college administration."
+        )
+
 
     access_token = create_access_token({
         "sub": str(user.id),
@@ -145,7 +155,87 @@ def create_admin(
     }
 
 
+# ==================================================
+# ADMIN CREATES ADMISSION OFFICER
+# ==================================================
 
+@router.post("/admin/create-admission-officer")
+def create_admission_officer(
+    name: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    admission_officer_id: str = Form(...),
+    phone: str = Form(None),
+
+    db: Session = Depends(get_db),
+
+    current_admin: User = Depends(require_admin)
+):
+
+    # Check existing email
+    existing_user = db.query(User).filter(
+        User.email == email
+    ).first()
+
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already registered"
+        )
+
+    # Check existing Admission Officer ID
+    existing_officer = db.query(AdmissionOfficer).filter(
+        AdmissionOfficer.admission_officer_id == admission_officer_id
+    ).first()
+
+    if existing_officer:
+        raise HTTPException(
+            status_code=400,
+            detail="Admission Officer ID already exists"
+        )
+
+    try:
+
+        # Create User account
+        officer_user = User(
+            name=name,
+            email=email,
+            password_hash=hash_password(password),
+            role="admission_officer"
+        )
+
+        db.add(officer_user)
+        db.flush()
+
+        # Create Admission Officer profile
+        admission_officer = AdmissionOfficer(
+            user_id=officer_user.id,
+            admission_officer_id=admission_officer_id,
+            phone=phone
+        )
+
+        db.add(admission_officer)
+
+        db.commit()
+
+        db.refresh(officer_user)
+        db.refresh(admission_officer)
+
+        return {
+            "message": "Admission Officer created successfully",
+            "user_id": officer_user.id,
+            "admission_officer_id": admission_officer.admission_officer_id,
+            "name": officer_user.name,
+            "email": officer_user.email,
+            "phone": admission_officer.phone,
+            "role": officer_user.role
+        }
+
+    except Exception:
+        db.rollback()
+        raise
+
+    
 
 
 # ==================================================

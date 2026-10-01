@@ -1,8 +1,9 @@
+
 from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
-    Form
+    status
 )
 
 from sqlalchemy.orm import Session
@@ -12,13 +13,13 @@ from app.database.database import get_db
 from app.database.models import (
     Student,
     User,
-    Department,
-    Course
+    Faculty
 )
 
-from app.utils.auth import require_faculty
-
-from app.utils.security import hash_password
+from app.utils.auth import (
+    require_admin,
+    get_current_user
+)
 
 
 router = APIRouter(
@@ -27,225 +28,75 @@ router = APIRouter(
 )
 
 
-# --------------------------------------------------
-# CREATE STUDENT
-# --------------------------------------------------
+# ==================================================
+# ADMIN OR FACULTY ACCESS
+# ==================================================
 
-@router.post("/create")
-def create_student(
-    name: str = Form(...),
-    email: str = Form(...),
-    password: str = Form(...),
-    student_id: str = Form(...),
-    phone: str | None = Form(None),
-    department_id: int = Form(...),
-    course_id: int = Form(...),
-    semester: int = Form(...),
-
-    db: Session = Depends(get_db),
-    current_faculty: User = Depends(require_faculty)
+def require_admin_or_faculty(
+    current_user: User = Depends(get_current_user)
 ):
 
+    if current_user.role not in ["admin", "faculty"]:
 
-    
-    # -----------------------------------------
-    # CLEAN INPUT
-    # -----------------------------------------
-
-    student_id = student_id.strip()
-    name = name.strip()
-    email = email.strip().lower()
-
-    if phone:
-        phone = phone.strip()
-
-    # -----------------------------------------
-    # VALIDATION
-    # -----------------------------------------
-
-    if not student_id:
         raise HTTPException(
-            status_code=400,
-            detail="Student ID cannot be empty"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Admin or Faculty can access student records."
         )
 
-    if not name:
-        raise HTTPException(
-            status_code=400,
-            detail="Student name cannot be empty"
-        )
-
-    if not email:
-        raise HTTPException(
-            status_code=400,
-            detail="Email cannot be empty"
-        )
-
-    if not password:
-        raise HTTPException(
-            status_code=400,
-            detail="Password cannot be empty"
-        )
-
-    if len(password) < 8:
-        raise HTTPException(
-            status_code=400,
-            detail="Password must be at least 8 characters long"
-        )
+    return current_user
 
 
+# ==================================================
+# GET FACULTY DEPARTMENT
+# ==================================================
 
-    # ----------------------------------------------
-    # CHECK EMAIL
-    # ----------------------------------------------
+def get_faculty_department(
+    current_user: User,
+    db: Session
+):
 
-    existing_user = db.query(User).filter(
-        User.email == email
+    faculty = db.query(Faculty).filter(
+        Faculty.user_id == current_user.id
     ).first()
 
-    if existing_user:
+    if not faculty:
+
         raise HTTPException(
-            status_code=400,
-            detail="Email already registered"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Faculty profile not found."
         )
 
-
-    # ----------------------------------------------
-    # CHECK STUDENT ID
-    # ----------------------------------------------
-
-    existing_student = db.query(Student).filter(
-        Student.student_id == student_id
-    ).first()
-
-    if existing_student:
-        raise HTTPException(
-            status_code=400,
-            detail="Student ID already exists"
-        )
+    return faculty.department_id
 
 
-    # ----------------------------------------------
-    # CHECK DEPARTMENT
-    # ----------------------------------------------
-
-    department = db.query(Department).filter(
-        Department.id == department_id
-    ).first()
-
-    if not department:
-        raise HTTPException(
-            status_code=404,
-            detail="Department not found"
-        )
-
-
-    # ----------------------------------------------
-    # CHECK COURSE
-    # ----------------------------------------------
-
-    course = db.query(Course).filter(
-        Course.id == course_id
-    ).first()
-
-    if not course:
-        raise HTTPException(
-            status_code=404,
-            detail="Course not found"
-        )
-
-
-    # ----------------------------------------------
-    # COURSE MUST BELONG TO DEPARTMENT
-    # ----------------------------------------------
-
-    if course.department_id != department_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Selected course does not belong to selected department"
-        )
-
-
-    # ----------------------------------------------
-    # VALIDATE SEMESTER
-    # ----------------------------------------------
-
-    if semester < 1 or semester > 12:
-        raise HTTPException(
-            status_code=400,
-            detail="Semester must be between 1 and 12"
-        )
-
-
-    # ----------------------------------------------
-    # CREATE USER ACCOUNT
-    # ----------------------------------------------
-
-    user = User(
-        name=name,
-        email=email,
-        password_hash=hash_password(password),
-        role="student"
-    )
-
-    db.add(user)
-
-    # Generate user.id before creating Student
-    db.flush()
-
-
-    # ----------------------------------------------
-    # CREATE STUDENT PROFILE
-    # ----------------------------------------------
-
-    student = Student(
-        user_id=user.id,
-        student_id=student_id,
-        name=name,
-        phone=phone,
-        department_id=department_id,
-        course_id=course_id,
-        semester=semester
-    )
-
-    db.add(student)
-
-    db.commit()
-
-    db.refresh(user)
-    db.refresh(student)
-
-
-    # ----------------------------------------------
-    # RESPONSE
-    # ----------------------------------------------
-
-    return {
-        "message": "Student created successfully",
-        "id": student.id,
-        "student_id": student.student_id,
-        "name": student.name,
-        "email": user.email,
-        "phone": student.phone,
-        "department_id": department.id,
-        "department": department.name,
-        "course_id": course.id,
-        "course": course.name,
-        "semester": student.semester
-    }
-
-
-# --------------------------------------------------
-# GET ALL STUDENTS
-# --------------------------------------------------
+# ==================================================
+# GET ALL ACTIVE STUDENTS
+# ADMIN OR FACULTY
+# ==================================================
 
 @router.get("/")
 def get_all_students(
     db: Session = Depends(get_db),
-    current_faculty: User = Depends(require_faculty)
+    current_user: User = Depends(require_admin_or_faculty)
 ):
 
-    students = db.query(Student).all()
+    query = db.query(Student).filter(
+        Student.is_active.is_(True)
+    )
+
+    # Faculty can view only their department students
+    if current_user.role == "faculty":
+
+        department_id = get_faculty_department(
+            current_user,
+            db
+        )
+
+        query = query.filter(
+            Student.department_id == department_id
+        )
+
+    students = query.all()
 
     result = []
 
@@ -261,35 +112,53 @@ def get_all_students(
             "department": student.department.name,
             "course_id": student.course_id,
             "course": student.course.name,
-            "semester": student.semester
+            "semester": student.semester,
+            "is_active": student.is_active
         })
 
     return result
 
 
-# --------------------------------------------------
-# GET STUDENT BY ID
-# --------------------------------------------------
+# ==================================================
+# GET STUDENT BY STUDENT ID
+# ADMIN OR FACULTY
+# ==================================================
 
 @router.get("/{student_id}")
 def get_student(
     student_id: str,
     db: Session = Depends(get_db),
-    current_faculty: User = Depends(require_faculty)
+    current_user: User = Depends(require_admin_or_faculty)
 ):
 
     student_id = student_id.strip()
 
-
     student = db.query(Student).filter(
-        Student.student_id == student_id
+        Student.student_id == student_id,
+        Student.is_active.is_(True)
     ).first()
 
     if not student:
+
         raise HTTPException(
-            status_code=404,
-            detail="Student not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found."
         )
+
+    # Faculty department restriction
+    if current_user.role == "faculty":
+
+        department_id = get_faculty_department(
+            current_user,
+            db
+        )
+
+        if student.department_id != department_id:
+
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You cannot access students from another department."
+            )
 
     return {
         "id": student.id,
@@ -301,19 +170,21 @@ def get_student(
         "department": student.department.name,
         "course_id": student.course_id,
         "course": student.course.name,
-        "semester": student.semester
+        "semester": student.semester,
+        "is_active": student.is_active
     }
 
 
-# --------------------------------------------------
-# DELETE STUDENT
-# --------------------------------------------------
+# ==================================================
+# DEACTIVATE STUDENT
+# ADMIN ONLY
+# ==================================================
 
 @router.delete("/{student_id}")
-def delete_student(
+def deactivate_student(
     student_id: str,
     db: Session = Depends(get_db),
-    current_faculty: User = Depends(require_faculty)
+    current_user: User = Depends(require_admin)
 ):
 
     student_id = student_id.strip()
@@ -323,27 +194,108 @@ def delete_student(
     ).first()
 
     if not student:
+
         raise HTTPException(
-            status_code=404,
-            detail="Student not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found."
         )
 
+    if not student.is_active:
 
-    # Find linked user
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Student is already deactivated."
+        )
+
     user = db.query(User).filter(
         User.id == student.user_id
     ).first()
 
+    if not user:
 
-    # Delete student profile
-    db.delete(student)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student user account not found."
+        )
 
-    # Delete login account
-    if user:
-        db.delete(user)
+    try:
 
-    db.commit()
+        student.is_active = False
+        user.is_active = False
+
+        db.commit()
+
+    except Exception:
+
+        db.rollback()
+        raise
 
     return {
-        "message": "Student deleted successfully"
+        "message": "Student deactivated successfully.",
+        "student_id": student.student_id,
+        "name": student.name,
+        "is_active": False
+    }
+
+
+# ==================================================
+# REACTIVATE STUDENT
+# ADMIN ONLY
+# ==================================================
+
+@router.put("/{student_id}/reactivate")
+def reactivate_student(
+    student_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+
+    student_id = student_id.strip()
+
+    student = db.query(Student).filter(
+        Student.student_id == student_id
+    ).first()
+
+    if not student:
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found."
+        )
+
+    if student.is_active:
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Student is already active."
+        )
+
+    user = db.query(User).filter(
+        User.id == student.user_id
+    ).first()
+
+    if not user:
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student user account not found."
+        )
+
+    try:
+
+        student.is_active = True
+        user.is_active = True
+
+        db.commit()
+
+    except Exception:
+
+        db.rollback()
+        raise
+
+    return {
+        "message": "Student reactivated successfully.",
+        "student_id": student.student_id,
+        "name": student.name,
+        "is_active": True
     }
