@@ -1713,22 +1713,22 @@ class Performance(Base):
     )
 
     attendance_percentage = Column(
-        Integer,
+        Float,
         nullable=False
     )
 
     marks_percentage = Column(
-        Integer,
+        Float,
         nullable=False
     )
 
     assignment_percentage = Column(
-        Integer,
+        Float,
         nullable=False
     )
 
     overall_percentage = Column(
-        Integer,
+        Float,
         nullable=False
     )
 
@@ -1736,6 +1736,14 @@ class Performance(Base):
         String(30),
         nullable=False
     )
+
+    pass_status = Column(
+        String(20),
+        nullable=False,
+        default="FAIL",
+        server_default="FAIL"
+    )
+
 
     created_at = Column(
         DateTime(timezone=True),
@@ -1951,28 +1959,28 @@ class StudentMLRecord(Base):
     )
 
     attendance_percentage = Column(
-        Integer,
+        Float,
         nullable=False
     )
 
     internal_marks_percentage = Column(
-        Integer,
+        Float,
         nullable=False
     )
 
     assignment_percentage = Column(
-        Integer,
+        Float,
         nullable=False
     )
 
     previous_exam_percentage = Column(
-        Integer,
+        Float,
         nullable=False
     )
 
 
     final_exam_percentage = Column(
-        Integer,
+        Float,
         nullable=False
     )
 

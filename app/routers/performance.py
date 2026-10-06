@@ -26,6 +26,21 @@ router = APIRouter(
 
 
 # ==================================================
+# PERFORMANCE RULES
+# ==================================================
+
+# Minimum attendance required to be eligible
+MIN_ATTENDANCE_PERCENTAGE = 75
+
+# Minimum academic percentage required to PASS
+MIN_ACADEMIC_PERCENTAGE = 40
+
+# Academic performance weights
+MARKS_WEIGHT = 0.70
+ASSIGNMENT_WEIGHT = 0.30
+
+
+# ==================================================
 # CALCULATE STUDENT PERFORMANCE
 # ==================================================
 
@@ -39,43 +54,39 @@ def calculate_performance(
     current_faculty=Depends(require_faculty)
 ):
 
-    
-
-    # ------------------------------------------------
+    # ==================================================
     # CHECK STUDENT
-    # ------------------------------------------------
+    # ==================================================
 
     student = db.query(Student).filter(
         Student.student_id == student_id
     ).first()
 
     if not student:
-
         raise HTTPException(
             status_code=404,
             detail="Student not found"
         )
 
 
-    # ------------------------------------------------
+    # ==================================================
     # CHECK SUBJECT
-    # ------------------------------------------------
+    # ==================================================
 
     subject = db.query(Subject).filter(
         Subject.id == subject_id
     ).first()
 
     if not subject:
-
         raise HTTPException(
             status_code=404,
             detail="Subject not found"
         )
 
 
-    # ------------------------------------------------
+    # ==================================================
     # CHECK FACULTY SUBJECT ASSIGNMENT
-    # ------------------------------------------------
+    # ==================================================
 
     faculty_subject = db.query(FacultySubject).filter(
         FacultySubject.subject_id == subject_id,
@@ -85,7 +96,6 @@ def calculate_performance(
     ).first()
 
     if not faculty_subject:
-
         raise HTTPException(
             status_code=403,
             detail="You are not assigned to this subject"
@@ -117,7 +127,13 @@ def calculate_performance(
 
     else:
 
-        attendance_percentage = 0
+        attendance_percentage = 0.0
+
+
+    attendance_percentage = round(
+        attendance_percentage,
+        2
+    )
 
 
     # ==================================================
@@ -142,12 +158,19 @@ def calculate_performance(
     if total_max_marks > 0:
 
         marks_percentage = (
-            total_marks_obtained / total_max_marks
+            total_marks_obtained /
+            total_max_marks
         ) * 100
 
     else:
 
-        marks_percentage = 0
+        marks_percentage = 0.0
+
+
+    marks_percentage = round(
+        marks_percentage,
+        2
+    )
 
 
     # ==================================================
@@ -178,46 +201,88 @@ def calculate_performance(
 
     else:
 
-        assignment_percentage = 0
+        assignment_percentage = 0.0
+
+
+    assignment_percentage = round(
+        assignment_percentage,
+        2
+    )
 
 
     # ==================================================
-    # OVERALL PERFORMANCE
+    # ACADEMIC PERFORMANCE
     # ==================================================
 
-    overall_percentage = (
-        attendance_percentage +
-        marks_percentage +
-        assignment_percentage
-    ) / 3
+    # Marks = 70%
+    # Assignments = 30%
+
+    academic_percentage = (
+        (marks_percentage * MARKS_WEIGHT)
+        +
+        (assignment_percentage * ASSIGNMENT_WEIGHT)
+    )
+
+    academic_percentage = round(
+        academic_percentage,
+        2
+    )
+
+
+    # ==================================================
+    # PASS / FAIL
+    # ==================================================
+
+    attendance_pass = (
+        attendance_percentage >=
+        MIN_ATTENDANCE_PERCENTAGE
+    )
+
+    academic_pass = (
+        academic_percentage >=
+        MIN_ACADEMIC_PERCENTAGE
+    )
+
+
+    # Student must satisfy BOTH conditions
+
+    if attendance_pass and academic_pass:
+
+        pass_status = "PASS"
+
+    else:
+
+        pass_status = "FAIL"
 
 
     # ==================================================
     # PERFORMANCE LEVEL
     # ==================================================
 
-    if overall_percentage >= 80:
+    if pass_status == "FAIL":
+
+        performance_level = "Poor"
+
+    elif academic_percentage >= 80:
 
         performance_level = "Excellent"
 
-    elif overall_percentage >= 60:
+    elif academic_percentage >= 60:
 
         performance_level = "Good"
 
-    elif overall_percentage >= 40:
-
-        performance_level = "Average"
-
     else:
 
-        performance_level = "Poor"
+        performance_level = "Average"
 
 
     # ==================================================
     # CHECK EXISTING PERFORMANCE
     # ==================================================
 
-    existing_performance = db.query(Performance).filter(
+    existing_performance = db.query(
+        Performance
+    ).filter(
         Performance.student_id == student_id,
         Performance.subject_id == subject_id
     ).first()
@@ -229,20 +294,24 @@ def calculate_performance(
 
     if existing_performance:
 
-        existing_performance.attendance_percentage = round(
+        existing_performance.attendance_percentage = (
             attendance_percentage
         )
 
-        existing_performance.marks_percentage = round(
+        existing_performance.marks_percentage = (
             marks_percentage
         )
 
-        existing_performance.assignment_percentage = round(
+        existing_performance.assignment_percentage = (
             assignment_percentage
         )
 
-        existing_performance.overall_percentage = round(
-            overall_percentage
+        existing_performance.overall_percentage = (
+            academic_percentage
+        )
+
+        existing_performance.pass_status = (
+            pass_status
         )
 
         existing_performance.performance_level = (
@@ -267,23 +336,29 @@ def calculate_performance(
 
             subject_id=subject_id,
 
-            attendance_percentage=round(
+            attendance_percentage=(
                 attendance_percentage
             ),
 
-            marks_percentage=round(
+            marks_percentage=(
                 marks_percentage
             ),
 
-            assignment_percentage=round(
+            assignment_percentage=(
                 assignment_percentage
             ),
 
-            overall_percentage=round(
-                overall_percentage
+            overall_percentage=(
+                academic_percentage
             ),
 
-            performance_level=performance_level
+            pass_status=(
+                pass_status
+            ),
+
+            performance_level=(
+                performance_level
+            )
         )
 
         db.add(performance)
@@ -298,17 +373,23 @@ def calculate_performance(
 
     return {
 
-        "message": "Performance calculated successfully",
+        "message":
+            "Performance calculated successfully",
 
-        "performance_id": performance.id,
+        "performance_id":
+            performance.id,
 
-        "student_id": student.student_id,
+        "student_id":
+            student.student_id,
 
-        "student_name": student.name,
+        "student_name":
+            student.name,
 
-        "subject_id": subject.id,
+        "subject_id":
+            subject.id,
 
-        "subject_name": subject.name,
+        "subject_name":
+            subject.name,
 
         "attendance_percentage":
             performance.attendance_percentage,
@@ -319,11 +400,31 @@ def calculate_performance(
         "assignment_percentage":
             performance.assignment_percentage,
 
-        "overall_percentage":
+        "academic_percentage":
             performance.overall_percentage,
 
+        "pass_status":
+            performance.pass_status,
+
         "performance_level":
-            performance.performance_level
+            performance.performance_level,
+
+        "rules": {
+
+            "minimum_attendance":
+                MIN_ATTENDANCE_PERCENTAGE,
+
+            "minimum_academic_percentage":
+                MIN_ACADEMIC_PERCENTAGE,
+
+            "marks_weight":
+                "70%",
+
+            "assignment_weight":
+                "30%"
+
+        }
+
     }
 
 
@@ -337,10 +438,6 @@ def get_all_performance(
     current_faculty=Depends(require_faculty)
 ):
 
-    # ------------------------------------------------
-    # GET FACULTY ASSIGNED SUBJECTS
-    # ------------------------------------------------
-
     assigned_subject_ids = [
         item.subject_id
         for item in db.query(FacultySubject).filter(
@@ -350,11 +447,6 @@ def get_all_performance(
         ).all()
     ]
 
-
-    # ------------------------------------------------
-    # NO ASSIGNED SUBJECTS
-    # ------------------------------------------------
-
     if not assigned_subject_ids:
 
         return {
@@ -363,18 +455,14 @@ def get_all_performance(
         }
 
 
-    # ------------------------------------------------
-    # GET PERFORMANCE ONLY FOR ASSIGNED SUBJECTS
-    # ------------------------------------------------
-
-    performance_records = db.query(Performance).filter(
-        Performance.subject_id.in_(assigned_subject_ids)
+    performance_records = db.query(
+        Performance
+    ).filter(
+        Performance.subject_id.in_(
+            assigned_subject_ids
+        )
     ).all()
 
-
-    # ------------------------------------------------
-    # BUILD RESPONSE
-    # ------------------------------------------------
 
     result = []
 
@@ -382,7 +470,8 @@ def get_all_performance(
 
         result.append({
 
-            "performance_id": performance.id,
+            "performance_id":
+                performance.id,
 
             "student_id":
                 performance.student.student_id,
@@ -405,19 +494,25 @@ def get_all_performance(
             "assignment_percentage":
                 performance.assignment_percentage,
 
-            "overall_percentage":
+            "academic_percentage":
                 performance.overall_percentage,
+
+            "pass_status":
+                performance.pass_status,
 
             "performance_level":
                 performance.performance_level
+
         })
 
 
     return {
 
-        "total_records": len(result),
+        "total_records":
+            len(result),
 
-        "performance": result
+        "performance":
+            result
     }
 
 
@@ -435,10 +530,6 @@ def get_student_performance(
     current_faculty=Depends(require_faculty)
 ):
 
-    # ------------------------------------------------
-    # CHECK STUDENT
-    # ------------------------------------------------
-
     student = db.query(Student).filter(
         Student.student_id == student_id
     ).first()
@@ -451,10 +542,6 @@ def get_student_performance(
         )
 
 
-    # ------------------------------------------------
-    # GET FACULTY ASSIGNED SUBJECTS
-    # ------------------------------------------------
-
     assigned_subject_ids = [
         item.subject_id
         for item in db.query(FacultySubject).filter(
@@ -464,10 +551,6 @@ def get_student_performance(
         ).all()
     ]
 
-
-    # ------------------------------------------------
-    # NO ASSIGNED SUBJECTS
-    # ------------------------------------------------
 
     if not assigned_subject_ids:
 
@@ -485,11 +568,9 @@ def get_student_performance(
         }
 
 
-    # ------------------------------------------------
-    # GET ONLY ASSIGNED SUBJECT PERFORMANCE
-    # ------------------------------------------------
-
-    performance_records = db.query(Performance).filter(
+    performance_records = db.query(
+        Performance
+    ).filter(
 
         Performance.student_id == student_id,
 
@@ -499,10 +580,6 @@ def get_student_performance(
 
     ).all()
 
-
-    # ------------------------------------------------
-    # RESPONSE
-    # ------------------------------------------------
 
     return {
 
@@ -537,14 +614,20 @@ def get_student_performance(
                 "assignment_percentage":
                     performance.assignment_percentage,
 
-                "overall_percentage":
+                "academic_percentage":
                     performance.overall_percentage,
+
+                "pass_status":
+                    performance.pass_status,
 
                 "performance_level":
                     performance.performance_level
+
             }
 
-            for performance in performance_records
+            for performance
+            in performance_records
+
         ]
     }
 
@@ -561,10 +644,6 @@ def get_my_performance(
     current_student=Depends(require_student)
 ):
 
-    # ------------------------------------------------
-    # GET CURRENT STUDENT PROFILE
-    # ------------------------------------------------
-
     student = db.query(Student).filter(
         Student.user_id == current_student.id
     ).first()
@@ -577,18 +656,13 @@ def get_my_performance(
         )
 
 
-    # ------------------------------------------------
-    # GET ONLY CURRENT STUDENT PERFORMANCE
-    # ------------------------------------------------
-
-    performance_records = db.query(Performance).filter(
-        Performance.student_id == student.student_id
+    performance_records = db.query(
+        Performance
+    ).filter(
+        Performance.student_id ==
+        student.student_id
     ).all()
 
-
-    # ------------------------------------------------
-    # RESPONSE
-    # ------------------------------------------------
 
     return {
 
@@ -623,13 +697,19 @@ def get_my_performance(
                 "assignment_percentage":
                     performance.assignment_percentage,
 
-                "overall_percentage":
+                "academic_percentage":
                     performance.overall_percentage,
+
+                "pass_status":
+                    performance.pass_status,
 
                 "performance_level":
                     performance.performance_level
+
             }
 
-            for performance in performance_records
+            for performance
+            in performance_records
+
         ]
     }
