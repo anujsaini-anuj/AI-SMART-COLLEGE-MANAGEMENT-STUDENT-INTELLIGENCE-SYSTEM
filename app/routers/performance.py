@@ -18,6 +18,11 @@ from app.utils.auth import (
     require_student
 )
 
+# Automatic Student Risk calculation
+from app.routers.risk import (
+    create_or_update_student_risk
+)
+
 
 router = APIRouter(
     prefix="/performance",
@@ -58,14 +63,26 @@ def calculate_performance(
     # CHECK STUDENT
     # ==================================================
 
-    student = db.query(Student).filter(
-        Student.student_id == student_id
-    ).first()
+    student = (
+        db.query(Student)
+        .filter(
+            Student.student_id == student_id
+        )
+        .first()
+    )
 
     if not student:
+
         raise HTTPException(
             status_code=404,
             detail="Student not found"
+        )
+
+    if not student.is_active:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Performance calculation is not allowed for an inactive student."
         )
 
 
@@ -73,11 +90,16 @@ def calculate_performance(
     # CHECK SUBJECT
     # ==================================================
 
-    subject = db.query(Subject).filter(
-        Subject.id == subject_id
-    ).first()
+    subject = (
+        db.query(Subject)
+        .filter(
+            Subject.id == subject_id
+        )
+        .first()
+    )
 
     if not subject:
+
         raise HTTPException(
             status_code=404,
             detail="Subject not found"
@@ -85,17 +107,34 @@ def calculate_performance(
 
 
     # ==================================================
+    # CHECK SUBJECT BELONGS TO STUDENT COURSE
+    # ==================================================
+
+    if subject.course_id != student.course_id:
+
+        raise HTTPException(
+            status_code=400,
+            detail="This subject does not belong to the student's course."
+        )
+
+
+    # ==================================================
     # CHECK FACULTY SUBJECT ASSIGNMENT
     # ==================================================
 
-    faculty_subject = db.query(FacultySubject).filter(
-        FacultySubject.subject_id == subject_id,
-        FacultySubject.faculty.has(
-            user_id=current_faculty.id
+    faculty_subject = (
+        db.query(FacultySubject)
+        .filter(
+            FacultySubject.subject_id == subject_id,
+            FacultySubject.faculty.has(
+                user_id=current_faculty.id
+            )
         )
-    ).first()
+        .first()
+    )
 
     if not faculty_subject:
+
         raise HTTPException(
             status_code=403,
             detail="You are not assigned to this subject"
@@ -106,23 +145,30 @@ def calculate_performance(
     # ATTENDANCE CALCULATION
     # ==================================================
 
-    attendance_records = db.query(Attendance).filter(
-        Attendance.student_id == student_id,
-        Attendance.subject_id == subject_id
-    ).all()
+    attendance_records = (
+        db.query(Attendance)
+        .filter(
+            Attendance.student_id == student_id,
+            Attendance.subject_id == subject_id
+        )
+        .all()
+    )
 
-    total_attendance = len(attendance_records)
+    total_attendance = len(
+        attendance_records
+    )
 
     present_attendance = len([
         record
         for record in attendance_records
-        if record.status == "Present"
+        if str(record.status).strip().lower() == "present"
     ])
 
     if total_attendance > 0:
 
         attendance_percentage = (
-            present_attendance / total_attendance
+            present_attendance /
+            total_attendance
         ) * 100
 
     else:
@@ -140,10 +186,14 @@ def calculate_performance(
     # MARKS CALCULATION
     # ==================================================
 
-    marks_records = db.query(Marks).filter(
-        Marks.student_id == student_id,
-        Marks.subject_id == subject_id
-    ).all()
+    marks_records = (
+        db.query(Marks)
+        .filter(
+            Marks.student_id == student_id,
+            Marks.subject_id == subject_id
+        )
+        .all()
+    )
 
     total_marks_obtained = sum(
         mark.marks_obtained
@@ -177,10 +227,14 @@ def calculate_performance(
     # ASSIGNMENT CALCULATION
     # ==================================================
 
-    assignment_records = db.query(Assignment).filter(
-        Assignment.student_id == student_id,
-        Assignment.subject_id == subject_id
-    ).all()
+    assignment_records = (
+        db.query(Assignment)
+        .filter(
+            Assignment.student_id == student_id,
+            Assignment.subject_id == subject_id
+        )
+        .all()
+    )
 
     total_assignment_obtained = sum(
         assignment.marks_obtained or 0
@@ -280,16 +334,18 @@ def calculate_performance(
     # CHECK EXISTING PERFORMANCE
     # ==================================================
 
-    existing_performance = db.query(
-        Performance
-    ).filter(
-        Performance.student_id == student_id,
-        Performance.subject_id == subject_id
-    ).first()
+    existing_performance = (
+        db.query(Performance)
+        .filter(
+            Performance.student_id == student_id,
+            Performance.subject_id == subject_id
+        )
+        .first()
+    )
 
 
     # ==================================================
-    # UPDATE EXISTING PERFORMANCE
+    # CREATE / UPDATE PERFORMANCE
     # ==================================================
 
     if existing_performance:
@@ -318,15 +374,8 @@ def calculate_performance(
             performance_level
         )
 
-        db.commit()
-        db.refresh(existing_performance)
-
         performance = existing_performance
-
-
-    # ==================================================
-    # CREATE PERFORMANCE
-    # ==================================================
+        performance_action = "updated"
 
     else:
 
@@ -363,8 +412,43 @@ def calculate_performance(
 
         db.add(performance)
 
-        db.commit()
-        db.refresh(performance)
+        performance_action = "created"
+
+
+    # ==================================================
+    # FLUSH PERFORMANCE
+    # ==================================================
+
+    # Performance ko database session mein bhej deta hai
+    # bina final commit kiye.
+    db.flush()
+
+
+    # ==================================================
+    # AUTOMATIC STUDENT RISK
+    # ==================================================
+
+    risk_record, risk_action = create_or_update_student_risk(
+
+        db=db,
+
+        student_id=student_id,
+
+        subject_id=subject_id,
+
+        performance=performance
+    )
+
+
+    # ==================================================
+    # FINAL COMMIT
+    # ==================================================
+
+    db.commit()
+
+    db.refresh(performance)
+
+    db.refresh(risk_record)
 
 
     # ==================================================
@@ -374,40 +458,70 @@ def calculate_performance(
     return {
 
         "message":
-            "Performance calculated successfully",
+            "Performance and student risk calculated successfully",
+
+        "performance_action":
+            performance_action,
+
+        "risk_action":
+            risk_action,
 
         "performance_id":
             performance.id,
 
-        "student_id":
-            student.student_id,
+        "student": {
 
-        "student_name":
-            student.name,
+            "student_id":
+                student.student_id,
 
-        "subject_id":
-            subject.id,
+            "student_name":
+                student.name
+        },
 
-        "subject_name":
-            subject.name,
+        "subject": {
 
-        "attendance_percentage":
-            performance.attendance_percentage,
+            "subject_id":
+                subject.id,
 
-        "marks_percentage":
-            performance.marks_percentage,
+            "subject_name":
+                subject.name,
 
-        "assignment_percentage":
-            performance.assignment_percentage,
+            "subject_code":
+                subject.code
+        },
 
-        "academic_percentage":
-            performance.overall_percentage,
+        "performance": {
 
-        "pass_status":
-            performance.pass_status,
+            "attendance_percentage":
+                performance.attendance_percentage,
 
-        "performance_level":
-            performance.performance_level,
+            "marks_percentage":
+                performance.marks_percentage,
+
+            "assignment_percentage":
+                performance.assignment_percentage,
+
+            "academic_percentage":
+                performance.overall_percentage,
+
+            "pass_status":
+                performance.pass_status,
+
+            "performance_level":
+                performance.performance_level
+        },
+
+        "student_risk": {
+
+            "risk_score":
+                risk_record.risk_score,
+
+            "risk_level":
+                risk_record.risk_level,
+
+            "risk_reason":
+                risk_record.risk_reason
+        },
 
         "rules": {
 
@@ -422,9 +536,7 @@ def calculate_performance(
 
             "assignment_weight":
                 "30%"
-
         }
-
     }
 
 
@@ -434,34 +546,47 @@ def calculate_performance(
 
 @router.get("/")
 def get_all_performance(
+
     db: Session = Depends(get_db),
+
     current_faculty=Depends(require_faculty)
 ):
 
     assigned_subject_ids = [
+
         item.subject_id
-        for item in db.query(FacultySubject).filter(
-            FacultySubject.faculty.has(
-                user_id=current_faculty.id
+
+        for item in (
+            db.query(FacultySubject)
+            .filter(
+                FacultySubject.faculty.has(
+                    user_id=current_faculty.id
+                )
             )
-        ).all()
+            .all()
+        )
     ]
+
 
     if not assigned_subject_ids:
 
         return {
+
             "total_records": 0,
+
             "performance": []
         }
 
 
-    performance_records = db.query(
-        Performance
-    ).filter(
-        Performance.subject_id.in_(
-            assigned_subject_ids
+    performance_records = (
+        db.query(Performance)
+        .filter(
+            Performance.subject_id.in_(
+                assigned_subject_ids
+            )
         )
-    ).all()
+        .all()
+    )
 
 
     result = []
@@ -530,9 +655,13 @@ def get_student_performance(
     current_faculty=Depends(require_faculty)
 ):
 
-    student = db.query(Student).filter(
-        Student.student_id == student_id
-    ).first()
+    student = (
+        db.query(Student)
+        .filter(
+            Student.student_id == student_id
+        )
+        .first()
+    )
 
     if not student:
 
@@ -543,12 +672,18 @@ def get_student_performance(
 
 
     assigned_subject_ids = [
+
         item.subject_id
-        for item in db.query(FacultySubject).filter(
-            FacultySubject.faculty.has(
-                user_id=current_faculty.id
+
+        for item in (
+            db.query(FacultySubject)
+            .filter(
+                FacultySubject.faculty.has(
+                    user_id=current_faculty.id
+                )
             )
-        ).all()
+            .all()
+        )
     ]
 
 
@@ -562,23 +697,27 @@ def get_student_performance(
             "student_name":
                 student.name,
 
-            "total_subjects": 0,
+            "total_subjects":
+                0,
 
-            "performance": []
+            "performance":
+                []
         }
 
 
-    performance_records = db.query(
-        Performance
-    ).filter(
+    performance_records = (
+        db.query(Performance)
+        .filter(
 
-        Performance.student_id == student_id,
+            Performance.student_id == student_id,
 
-        Performance.subject_id.in_(
-            assigned_subject_ids
+            Performance.subject_id.in_(
+                assigned_subject_ids
+            )
+
         )
-
-    ).all()
+        .all()
+    )
 
 
     return {
@@ -644,9 +783,13 @@ def get_my_performance(
     current_student=Depends(require_student)
 ):
 
-    student = db.query(Student).filter(
-        Student.user_id == current_student.id
-    ).first()
+    student = (
+        db.query(Student)
+        .filter(
+            Student.user_id == current_student.id
+        )
+        .first()
+    )
 
     if not student:
 
@@ -656,12 +799,14 @@ def get_my_performance(
         )
 
 
-    performance_records = db.query(
-        Performance
-    ).filter(
-        Performance.student_id ==
-        student.student_id
-    ).all()
+    performance_records = (
+        db.query(Performance)
+        .filter(
+            Performance.student_id ==
+            student.student_id
+        )
+        .all()
+    )
 
 
     return {
