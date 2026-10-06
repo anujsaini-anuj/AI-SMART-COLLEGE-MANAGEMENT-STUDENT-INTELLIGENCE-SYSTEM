@@ -250,6 +250,11 @@ class AdmissionApplication(Base):
         nullable=False
     )
 
+    semester = Column(
+    Integer,
+    nullable=False
+    )
+
     academic_year = Column(
         String(20),
         nullable=False
@@ -1275,6 +1280,72 @@ class Student(Base):
     course = relationship(
         "Course",
         back_populates="students"
+    )
+
+    semester_history = relationship(
+        "StudentSemesterHistory",
+        back_populates="student",
+        cascade="all, delete-orphan"
+    )
+
+
+
+# ==================================================
+# STUDENT SEMESTER HISTORY
+# ==================================================
+
+class StudentSemesterHistory(Base):
+
+    __tablename__ = "student_semester_history"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    student_id = Column(
+        Integer,
+        ForeignKey("students.id"),
+        nullable=False
+    )
+
+    old_semester = Column(
+        Integer,
+        nullable=False
+    )
+
+    new_semester = Column(
+        Integer,
+        nullable=False
+    )
+
+    updated_by = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False
+    )
+
+    reason = Column(
+        String(300),
+        nullable=True
+    )
+
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    # Relationships
+
+    student = relationship(
+        "Student",
+        back_populates="semester_history"
+    )
+
+    updated_by_user = relationship(
+        "User"
     )
 
 

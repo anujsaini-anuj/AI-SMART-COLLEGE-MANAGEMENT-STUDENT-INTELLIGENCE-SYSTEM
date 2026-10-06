@@ -19,7 +19,8 @@ from app.database.models import (
     AdmissionApplication,
     Course,
     Student,
-    User
+    User,
+    StudentSemesterHistory
 )
 
 from app.utils.auth import get_current_user
@@ -121,6 +122,8 @@ def enroll_student(
     previous_percentage: float = Form(...),
 
     course_id: int = Form(...),
+
+    semester: int = Form(..., ge=1, le=8),
 
     academic_year: str = Form(...),
 
@@ -338,7 +341,7 @@ def enroll_student(
             phone=normalized_phone,
             department_id=course.department_id,
             course_id=course_id,
-            semester=1
+            semester=semester
         )
 
         db.add(new_student)
@@ -382,6 +385,7 @@ def enroll_student(
         passing_year=passing_year,
 
         course_id=course_id,
+        semester=semester,
         academic_year=academic_year,
 
         # ENROLLMENT INFORMATION
@@ -504,3 +508,228 @@ def get_admission(
         )
 
     return application
+
+
+
+
+
+# ==================================================
+# GET COMPLETE STUDENT ADMISSION DETAILS
+# ==================================================
+
+@router.get("/students/{student_id}")
+def get_student_admission_details(
+    student_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+
+    require_admission_access(current_user)
+
+    # ----------------------------------------------
+    # FIND STUDENT
+    # ----------------------------------------------
+
+    student = db.query(Student).filter(
+        Student.student_id == student_id
+    ).first()
+
+    if not student:
+        raise HTTPException(
+            status_code=404,
+            detail="Student not found."
+        )
+
+    # ----------------------------------------------
+    # FIND ADMISSION RECORD
+    # ----------------------------------------------
+
+    admission = db.query(AdmissionApplication).filter(
+        AdmissionApplication.enrolled_student_id == student.student_id
+    ).order_by(
+        AdmissionApplication.submitted_at.desc()
+    ).first()
+
+    if not admission:
+        raise HTTPException(
+            status_code=404,
+            detail="Admission record not found for this student."
+        )
+
+    # ----------------------------------------------
+    # RETURN COMPLETE DETAILS
+    # ----------------------------------------------
+
+    return {
+        "student": {
+            "student_id": student.student_id,
+            "name": student.name,
+            "phone": student.phone,
+            "course_id": student.course_id,
+            "department_id": student.department_id,
+            "current_semester": student.semester
+        },
+
+        "admission": {
+            "application_id": admission.id,
+            "application_number": admission.application_number,
+            "status": admission.status,
+            "academic_year": admission.academic_year,
+
+            "date_of_birth": admission.date_of_birth,
+            "gender": admission.gender,
+            "blood_group": admission.blood_group,
+            "category": admission.category,
+            "nationality": admission.nationality,
+
+            "father_name": admission.father_name,
+            "mother_name": admission.mother_name,
+
+            "address": admission.address,
+            "city": admission.city,
+            "state": admission.state,
+            "postal_code": admission.postal_code,
+
+            "previous_qualification": admission.previous_qualification,
+            "previous_percentage": admission.previous_percentage,
+            "previous_board": admission.previous_board,
+            "passing_year": admission.passing_year,
+
+            "admission_semester": admission.semester,
+
+            "admitted_by": admission.admitted_by,
+            "admission_remarks": admission.admission_remarks,
+            "submitted_at": admission.submitted_at
+        }
+    }
+
+
+
+
+# ==================================================
+# CHANGE STUDENT SEMESTER
+# ==================================================
+
+@router.put(
+    "/students/{student_id}/semester",
+    tags=["Admission Management"]
+)
+def change_student_semester(
+    student_id: str,
+
+    new_semester: int = Form(
+        ...,
+        ge=1,
+        le=8
+    ),
+
+    reason: str | None = Form(
+        None,
+        max_length=300
+    ),
+
+    current_user=Depends(get_current_user),
+
+    db: Session = Depends(get_db)
+):
+
+    # ----------------------------------------------
+    # ROLE CHECK
+    # ----------------------------------------------
+
+    if current_user.role not in [
+        "admin",
+        "admission_officer"
+    ]:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Only admin or admission officer "
+                "can change student semester"
+            )
+        )
+
+    # ----------------------------------------------
+    # FIND STUDENT
+    # ----------------------------------------------
+
+    student = db.query(Student).filter(
+        Student.student_id == student_id
+    ).first()
+
+    if not student:
+        raise HTTPException(
+            status_code=404,
+            detail="Student not found"
+        )
+
+    # ----------------------------------------------
+    # CHECK SAME SEMESTER
+    # ----------------------------------------------
+
+    if student.semester == new_semester:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Student is already in "
+                f"semester {new_semester}"
+            )
+        )
+
+    # ----------------------------------------------
+    # OLD SEMESTER
+    # ----------------------------------------------
+
+    old_semester = student.semester
+
+    # ----------------------------------------------
+    # UPDATE CURRENT SEMESTER
+    # ----------------------------------------------
+
+    student.semester = new_semester
+
+    # ----------------------------------------------
+    # CLEAN REASON
+    # ----------------------------------------------
+
+    clean_reason = (
+        reason.strip()
+        if reason and reason.strip()
+        else "Semester updated"
+    )
+
+    # ----------------------------------------------
+    # SAVE HISTORY
+    # ----------------------------------------------
+
+    history = StudentSemesterHistory(
+        student_id=student.id,
+        old_semester=old_semester,
+        new_semester=new_semester,
+        updated_by=current_user.id,
+        reason=clean_reason
+    )
+
+    db.add(history)
+
+    # ----------------------------------------------
+    # SAVE DATABASE
+    # ----------------------------------------------
+
+    db.commit()
+
+    db.refresh(student)
+
+    return {
+        "message": "Student semester updated successfully",
+
+        "student_id": student.student_id,
+
+        "old_semester": old_semester,
+
+        "new_semester": new_semester,
+
+        "updated_by": current_user.name,
+
+        "reason": clean_reason
+    }
