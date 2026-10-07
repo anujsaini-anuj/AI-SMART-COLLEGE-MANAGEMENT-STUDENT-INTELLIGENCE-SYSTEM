@@ -12,6 +12,9 @@ from app.database.models import (
 )
 from app.utils.auth import require_faculty, require_student
 
+from app.services.performance_service import (
+    calculate_and_update_performance
+)
 
 router = APIRouter(
     prefix="/attendance",
@@ -122,6 +125,31 @@ def mark_attendance(
             detail="Failed to mark attendance"
         )
 
+
+    # --------------------------------------------------
+    # AUTOMATIC PERFORMANCE + RISK UPDATE
+    # --------------------------------------------------
+
+    try:
+        calculate_and_update_performance(
+            db=db,
+            student_id=student_id,
+            subject_id=subject_id
+        )
+
+        automatic_processing = {
+            "performance": "updated",
+            "risk": "updated"
+        }
+
+    except Exception as e:
+
+        automatic_processing = {
+            "performance": "failed",
+            "risk": "not_updated",
+            "error": str(e)
+        }
+
     return {
         "message": "Attendance marked successfully",
         "attendance_id": attendance.id,
@@ -130,7 +158,8 @@ def mark_attendance(
         "subject_id": subject.id,
         "subject_name": subject.name,
         "date": attendance.date,
-        "status": attendance.status
+        "status": attendance.status,
+        "automatic_processing": automatic_processing
     }
 
 

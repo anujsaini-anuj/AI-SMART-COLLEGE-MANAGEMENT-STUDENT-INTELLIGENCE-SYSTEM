@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+
 from sklearn.cluster import KMeans
+
 import numpy as np
 
 from app.database.database import get_db
@@ -22,6 +24,10 @@ from app.utils.auth import (
 )
 
 
+# ============================================================
+# ROUTER
+# ============================================================
+
 router = APIRouter(
     prefix="/intelligence",
     tags=["Student Intelligence"]
@@ -29,54 +35,183 @@ router = APIRouter(
 
 
 # ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def get_segment_name(
+    cluster_centers,
+    cluster
+):
+    """
+    Convert KMeans cluster number into
+    Low / Medium / High based on average
+    cluster performance.
+    """
+
+    cluster_scores = {
+        index: float(np.mean(center))
+        for index, center
+        in enumerate(cluster_centers)
+    }
+
+    sorted_clusters = sorted(
+        cluster_scores,
+        key=cluster_scores.get
+    )
+
+    cluster_names = {}
+
+    if len(sorted_clusters) >= 1:
+        cluster_names[
+            sorted_clusters[0]
+        ] = "Low"
+
+    if len(sorted_clusters) >= 2:
+        cluster_names[
+            sorted_clusters[1]
+        ] = "Medium"
+
+    if len(sorted_clusters) >= 3:
+        cluster_names[
+            sorted_clusters[2]
+        ] = "High"
+
+    return cluster_names.get(
+        cluster,
+        "Unknown"
+    )
+
+
+# ============================================================
 # STUDENT INTELLIGENCE
-# STUDENT ONLY
 # ============================================================
 
 @router.get("/my-intelligence")
 def get_my_intelligence(
+
     db: Session = Depends(get_db),
-    current_student=Depends(require_student)
+
+    current_student=Depends(
+        require_student
+    )
 ):
 
     # --------------------------------------------------------
-    # FIND STUDENT PROFILE
+    # FIND CURRENT STUDENT
     # --------------------------------------------------------
 
-    student = db.query(Student).filter(
-        Student.user_id == current_student.id
-    ).first()
+    student = (
+        db.query(Student)
+        .filter(
+            Student.user_id ==
+            current_student.id
+        )
+        .first()
+    )
 
     if not student:
+
         raise HTTPException(
             status_code=404,
             detail="Student profile not found."
         )
 
+
     student_id = student.student_id
 
-    # ========================================================
+
+    # --------------------------------------------------------
     # PERFORMANCE
+    # --------------------------------------------------------
+
+    performance_records = (
+        db.query(Performance)
+        .filter(
+            Performance.student_id ==
+            student_id
+        )
+        .all()
+    )
+
+
+    # --------------------------------------------------------
+    # RISK
+    # --------------------------------------------------------
+
+    risk_records = (
+        db.query(StudentRisk)
+        .filter(
+            StudentRisk.student_id ==
+            student_id
+        )
+        .all()
+    )
+
+
+    # --------------------------------------------------------
+    # FUTURE PREDICTIONS ONLY
+    # --------------------------------------------------------
+
+    prediction_records = (
+        db.query(Prediction)
+        .filter(
+            Prediction.student_id ==
+            student_id,
+
+            Prediction.prediction_type ==
+            "Future Final Exam Performance"
+        )
+        .order_by(
+            Prediction.created_at.desc()
+        )
+        .all()
+    )
+
+
+    # --------------------------------------------------------
+    # RECOMMENDATIONS
+    # --------------------------------------------------------
+
+    recommendation_records = (
+        db.query(Recommendation)
+        .filter(
+            Recommendation.student_id ==
+            student_id
+        )
+        .order_by(
+            Recommendation.created_at.desc()
+        )
+        .all()
+    )
+
+
+    # ========================================================
+    # STUDENT PERFORMANCE RESPONSE
     # ========================================================
 
-    performance_records = db.query(Performance).filter(
-        Performance.student_id == student_id
-    ).all()
-
-    performance_data = []
+    performance = []
 
     for record in performance_records:
 
-        performance_data.append({
+        performance.append({
+
+            "performance_id":
+                record.id,
 
             "subject_id":
-                record.subject.id,
+                record.subject.id
+                if record.subject
+                else record.subject_id,
 
             "subject_name":
-                record.subject.name,
+                record.subject.name
+                if record.subject
+                else None,
 
             "subject_code":
-                record.subject.code,
+                record.subject.code
+                if record.subject
+                else None,
 
             "attendance_percentage":
                 record.attendance_percentage,
@@ -90,29 +225,39 @@ def get_my_intelligence(
             "overall_percentage":
                 record.overall_percentage,
 
+            "academic_percentage":
+                record.overall_percentage,
+
+            "pass_status":
+                record.pass_status,
+
             "performance_level":
                 record.performance_level
         })
 
+
     # ========================================================
-    # RISK
+    # RISK RESPONSE
     # ========================================================
 
-    risk_records = db.query(StudentRisk).filter(
-        StudentRisk.student_id == student_id
-    ).all()
-
-    risk_data = []
+    risk = []
 
     for record in risk_records:
 
-        risk_data.append({
+        risk.append({
+
+            "risk_id":
+                record.id,
 
             "subject_id":
-                record.subject.id,
+                record.subject.id
+                if record.subject
+                else record.subject_id,
 
             "subject_name":
-                record.subject.name,
+                record.subject.name
+                if record.subject
+                else None,
 
             "risk_score":
                 record.risk_score,
@@ -124,40 +269,31 @@ def get_my_intelligence(
                 record.risk_reason
         })
 
+
     # ========================================================
-    # FUTURE PREDICTIONS ONLY
+    # PREDICTION RESPONSE
     # ========================================================
 
-    prediction_records = db.query(Prediction).filter(
-        Prediction.student_id == student_id,
-        Prediction.prediction_type ==
-            "Future Final Exam Performance"
-    ).order_by(
-        Prediction.created_at.desc()
-    ).all()
-
-    prediction_data = []
+    predictions = []
 
     for record in prediction_records:
 
-        prediction_data.append({
+        predictions.append({
 
             "prediction_id":
                 record.id,
 
             "subject_id":
-                record.subject.id,
+                record.subject.id
+                if record.subject
+                else record.subject_id,
 
             "subject_name":
-                record.subject.name,
+                record.subject.name
+                if record.subject
+                else None,
 
-            "subject_code":
-                record.subject.code,
-
-            "prediction_type":
-                record.prediction_type,
-
-            "predicted_final_exam_percentage":
+            "predicted_performance":
                 record.predicted_performance,
 
             "predicted_level":
@@ -166,36 +302,36 @@ def get_my_intelligence(
             "model_name":
                 record.model_name,
 
+            "prediction_type":
+                record.prediction_type,
+
             "created_at":
                 record.created_at
         })
 
+
     # ========================================================
-    # RECOMMENDATIONS
+    # RECOMMENDATION RESPONSE
     # ========================================================
 
-    recommendation_records = db.query(
-        Recommendation
-    ).filter(
-        Recommendation.student_id == student_id
-    ).order_by(
-        Recommendation.created_at.desc()
-    ).all()
-
-    recommendation_data = []
+    recommendations = []
 
     for record in recommendation_records:
 
-        recommendation_data.append({
+        recommendations.append({
 
             "recommendation_id":
                 record.id,
 
             "subject_id":
-                record.subject.id,
+                record.subject.id
+                if record.subject
+                else record.subject_id,
 
             "subject_name":
-                record.subject.name,
+                record.subject.name
+                if record.subject
+                else None,
 
             "recommendation":
                 record.recommendation_text,
@@ -210,246 +346,328 @@ def get_my_intelligence(
                 record.created_at
         })
 
+
     # ========================================================
     # STUDENT LEVEL K-MEANS SEGMENTATION
     # ========================================================
 
-    all_performance = db.query(
-        Performance
-    ).all()
+    all_performance = (
+        db.query(Performance)
+        .all()
+    )
 
-    student_features = {}
+
+    student_data = {}
+
 
     for record in all_performance:
 
-        if record.student_id not in student_features:
+        sid = record.student_id
 
-            student_features[record.student_id] = {
+        if sid not in student_data:
+
+            student_data[sid] = {
+
                 "attendance": [],
+
                 "marks": [],
+
                 "assignment": []
             }
 
-        student_features[
-            record.student_id
-        ]["attendance"].append(
+
+        student_data[sid][
+            "attendance"
+        ].append(
             record.attendance_percentage
         )
 
-        student_features[
-            record.student_id
-        ]["marks"].append(
+        student_data[sid][
+            "marks"
+        ].append(
             record.marks_percentage
         )
 
-        student_features[
-            record.student_id
-        ]["assignment"].append(
+        student_data[sid][
+            "assignment"
+        ].append(
             record.assignment_percentage
         )
 
-    student_ids = list(
-        student_features.keys()
-    )
 
-    segment_data = None
+    segmentation = {
 
-    if len(student_ids) >= 3:
+        "available": False,
 
-        X = []
+        "message":
+            "Not enough students for segmentation."
+    }
 
-        for sid in student_ids:
 
-            data = student_features[sid]
+    if len(student_data) >= 3:
 
-            X.append([
-                np.mean(data["attendance"]),
-                np.mean(data["marks"]),
-                np.mean(data["assignment"])
-            ])
+        feature_rows = []
 
-        X = np.array(
-            X,
-            dtype=float
-        )
+        student_ids = []
 
-        kmeans = KMeans(
-            n_clusters=3,
-            n_init=10,
-            random_state=42
-        )
 
-        clusters = kmeans.fit_predict(X)
+        for sid, values in student_data.items():
 
-        centers = kmeans.cluster_centers_
-
-        # ----------------------------------------------------
-        # CALCULATE CLUSTER PERFORMANCE SCORE
-        # ----------------------------------------------------
-
-        cluster_scores = {}
-
-        for cluster_number in range(3):
-
-            cluster_scores[cluster_number] = np.mean(
-                centers[cluster_number]
+            avg_attendance = np.mean(
+                values["attendance"]
             )
 
-        # ----------------------------------------------------
-        # SORT CLUSTERS
-        # ----------------------------------------------------
+            avg_marks = np.mean(
+                values["marks"]
+            )
 
-        sorted_clusters = sorted(
-            cluster_scores,
-            key=cluster_scores.get
+            avg_assignment = np.mean(
+                values["assignment"]
+            )
+
+            feature_rows.append([
+
+                avg_attendance,
+
+                avg_marks,
+
+                avg_assignment
+            ])
+
+            student_ids.append(sid)
+
+
+        X = np.array(
+            feature_rows
         )
 
-        low_cluster = sorted_clusters[0]
-        medium_cluster = sorted_clusters[1]
-        high_cluster = sorted_clusters[2]
 
-        # ----------------------------------------------------
-        # FIND CURRENT STUDENT CLUSTER
-        # ----------------------------------------------------
+        kmeans = KMeans(
 
-        current_index = student_ids.index(
-            student_id
+            n_clusters=3,
+
+            random_state=42,
+
+            n_init=10
         )
 
-        current_cluster = int(
-            clusters[current_index]
-        )
 
-        if current_cluster == high_cluster:
+        labels = kmeans.fit_predict(X)
 
-            segment = "High Performance"
 
-        elif current_cluster == medium_cluster:
+        current_index = None
 
-            segment = "Medium Performance"
+        for index, sid in enumerate(
+            student_ids
+        ):
 
-        else:
+            if sid == student_id:
 
-            segment = "Low Performance"
+                current_index = index
 
-        current_features = X[current_index]
+                break
 
-        segment_data = {
 
-            "segment":
-                segment,
+        if current_index is not None:
 
-            "cluster":
-                current_cluster,
+            current_cluster = int(
+                labels[current_index]
+            )
 
-            "average_attendance":
-                round(
-                    float(current_features[0]),
-                    2
-                ),
+            cluster_names = {}
 
-            "average_marks":
-                round(
-                    float(current_features[1]),
-                    2
-                ),
+            cluster_scores = {}
 
-            "average_assignment":
-                round(
-                    float(current_features[2]),
-                    2
+            for index, center in enumerate(
+                kmeans.cluster_centers_
+            ):
+
+                cluster_scores[index] = (
+                    float(
+                        np.mean(center)
+                    )
                 )
-        }
 
-    else:
 
-        segment_data = {
+            sorted_clusters = sorted(
 
-            "segment":
-                "Not Available",
+                cluster_scores,
 
-            "cluster":
-                None,
+                key=cluster_scores.get
+            )
 
-            "average_attendance":
-                None,
 
-            "average_marks":
-                None,
+            if len(sorted_clusters) >= 1:
 
-            "average_assignment":
-                None
-        }
+                cluster_names[
+                    sorted_clusters[0]
+                ] = "Low"
+
+
+            if len(sorted_clusters) >= 2:
+
+                cluster_names[
+                    sorted_clusters[1]
+                ] = "Medium"
+
+
+            if len(sorted_clusters) >= 3:
+
+                cluster_names[
+                    sorted_clusters[2]
+                ] = "High"
+
+
+            current_features = (
+                X[current_index]
+            )
+
+
+            segmentation = {
+
+                "available": True,
+
+                "method":
+                    "K-Means Clustering",
+
+                "clusters":
+                    3,
+
+                "current_cluster":
+                    current_cluster,
+
+                "current_segment":
+                    cluster_names.get(
+                        current_cluster,
+                        "Unknown"
+                    ),
+
+                "average_attendance":
+                    round(
+                        float(
+                            current_features[0]
+                        ),
+                        2
+                    ),
+
+                "average_marks":
+                    round(
+                        float(
+                            current_features[1]
+                        ),
+                        2
+                    ),
+
+                "average_assignment":
+                    round(
+                        float(
+                            current_features[2]
+                        ),
+                        2
+                    )
+            }
+
 
     # ========================================================
-    # SUMMARY
+    # STUDENT SUMMARY
     # ========================================================
-
-    average_attendance = None
-    average_marks = None
-    average_assignment = None
-    average_overall = None
 
     if performance_records:
 
         average_attendance = round(
-            sum(
-                record.attendance_percentage
-                for record in performance_records
-            )
-            / len(performance_records),
+
+            float(
+                np.mean([
+                    record.attendance_percentage
+                    for record
+                    in performance_records
+                ])
+            ),
+
             2
         )
+
 
         average_marks = round(
-            sum(
-                record.marks_percentage
-                for record in performance_records
-            )
-            / len(performance_records),
+
+            float(
+                np.mean([
+                    record.marks_percentage
+                    for record
+                    in performance_records
+                ])
+            ),
+
             2
         )
+
 
         average_assignment = round(
-            sum(
-                record.assignment_percentage
-                for record in performance_records
-            )
-            / len(performance_records),
+
+            float(
+                np.mean([
+                    record.assignment_percentage
+                    for record
+                    in performance_records
+                ])
+            ),
+
             2
         )
+
 
         average_overall = round(
-            sum(
-                record.overall_percentage
-                for record in performance_records
-            )
-            / len(performance_records),
+
+            float(
+                np.mean([
+                    record.overall_percentage
+                    for record
+                    in performance_records
+                ])
+            ),
+
             2
         )
 
+    else:
+
+        average_attendance = 0
+
+        average_marks = 0
+
+        average_assignment = 0
+
+        average_overall = 0
+
+
     # ========================================================
-    # FINAL RESPONSE
+    # RETURN STUDENT INTELLIGENCE
     # ========================================================
 
     return {
-
-        "message":
-            "Student intelligence data retrieved successfully",
 
         "student": {
 
             "student_id":
                 student.student_id,
 
-            "student_name":
+            "name":
                 student.name,
+
+            "course_id":
+                student.course_id,
+
+            "department_id":
+                student.department_id,
 
             "semester":
                 student.semester
         },
 
         "summary": {
+
+            "total_subjects":
+                len(performance_records),
 
             "average_attendance":
                 average_attendance,
@@ -463,55 +681,59 @@ def get_my_intelligence(
             "average_overall_performance":
                 average_overall,
 
-            "performance_records":
-                len(performance_data),
+            "total_risk_records":
+                len(risk_records),
 
-            "risk_records":
-                len(risk_data),
+            "total_predictions":
+                len(prediction_records),
 
-            "predictions":
-                len(prediction_data),
-
-            "recommendations":
-                len(recommendation_data)
+            "total_recommendations":
+                len(recommendation_records)
         },
 
         "performance":
-            performance_data,
+            performance,
 
         "risk":
-            risk_data,
+            risk,
 
-        "prediction":
-            prediction_data,
+        "predictions":
+            predictions,
 
         "segmentation":
-            segment_data,
+            segmentation,
 
         "recommendations":
-            recommendation_data
+            recommendations
     }
 
 
 # ============================================================
 # FACULTY INTELLIGENCE
-# FACULTY ONLY
-# ONLY ASSIGNED SUBJECTS
 # ============================================================
 
 @router.get("/faculty")
 def get_faculty_intelligence(
+
     db: Session = Depends(get_db),
-    current_faculty=Depends(require_faculty)
+
+    current_faculty=Depends(
+        require_faculty
+    )
 ):
 
     # --------------------------------------------------------
-    # FIND FACULTY
+    # FACULTY PROFILE
     # --------------------------------------------------------
 
-    faculty = db.query(Faculty).filter(
-        Faculty.user_id == current_faculty.id
-    ).first()
+    faculty = (
+        db.query(Faculty)
+        .filter(
+            Faculty.user_id ==
+            current_faculty.id
+        )
+        .first()
+    )
 
     if not faculty:
 
@@ -520,129 +742,148 @@ def get_faculty_intelligence(
             detail="Faculty profile not found."
         )
 
+
     # --------------------------------------------------------
-    # GET ASSIGNED SUBJECTS
+    # ASSIGNED SUBJECTS
     # --------------------------------------------------------
 
-    faculty_subjects = db.query(
-        FacultySubject
-    ).filter(
-        FacultySubject.faculty_id == faculty.id
-    ).all()
+    assigned_subject_records = (
+        db.query(FacultySubject)
+        .filter(
+            FacultySubject.faculty_id ==
+            faculty.id
+        )
+        .all()
+    )
 
-    subject_ids = [
-        item.subject_id
-        for item in faculty_subjects
+
+    assigned_subject_ids = [
+
+        record.subject_id
+
+        for record
+        in assigned_subject_records
     ]
 
-    if not subject_ids:
+
+    # --------------------------------------------------------
+    # NO SUBJECTS
+    # --------------------------------------------------------
+
+    if not assigned_subject_ids:
 
         return {
 
-            "message":
-                "No subjects assigned to this faculty.",
-
             "faculty": {
 
-                "faculty_id":
-                    faculty.faculty_id,
+                "user_id":
+                    current_faculty.id,
 
-                "faculty_name":
-                    faculty.name
+                "name":
+                    current_faculty.name
             },
+
+            "assigned_subjects": [],
 
             "overview": {
 
                 "total_students":
                     0,
 
-                "high_risk_students":
+                "total_performance_records":
                     0,
 
-                "medium_risk_students":
+                "total_risk_records":
                     0,
 
-                "low_risk_students":
+                "total_predictions":
+                    0,
+
+                "total_recommendations":
                     0
             },
 
             "students": []
         }
 
-    # ========================================================
+
+    # --------------------------------------------------------
     # PERFORMANCE
-    # ========================================================
+    # --------------------------------------------------------
 
-    performance_records = db.query(
-        Performance
-    ).filter(
-        Performance.subject_id.in_(subject_ids)
-    ).all()
+    performance_records = (
+        db.query(Performance)
+        .filter(
+            Performance.subject_id.in_(
+                assigned_subject_ids
+            )
+        )
+        .all()
+    )
 
-    # ========================================================
+
+    # --------------------------------------------------------
     # RISK
-    # ========================================================
+    # --------------------------------------------------------
 
-    risk_records = db.query(
-        StudentRisk
-    ).filter(
-        StudentRisk.subject_id.in_(subject_ids)
-    ).all()
+    risk_records = (
+        db.query(StudentRisk)
+        .filter(
+            StudentRisk.subject_id.in_(
+                assigned_subject_ids
+            )
+        )
+        .all()
+    )
 
-    # ========================================================
-    # FUTURE PREDICTIONS ONLY
-    # ========================================================
 
-    prediction_records = db.query(
-        Prediction
-    ).filter(
-        Prediction.subject_id.in_(subject_ids),
-        Prediction.prediction_type ==
+    # --------------------------------------------------------
+    # FUTURE PREDICTIONS
+    # --------------------------------------------------------
+
+    prediction_records = (
+        db.query(Prediction)
+        .filter(
+
+            Prediction.subject_id.in_(
+                assigned_subject_ids
+            ),
+
+            Prediction.prediction_type ==
             "Future Final Exam Performance"
-    ).order_by(
-        Prediction.created_at.desc()
-    ).all()
 
-    # ========================================================
+        )
+        .order_by(
+            Prediction.created_at.desc()
+        )
+        .all()
+    )
+
+
+    # --------------------------------------------------------
     # RECOMMENDATIONS
-    # ========================================================
+    # --------------------------------------------------------
 
-    recommendation_records = db.query(
-        Recommendation
-    ).filter(
-        Recommendation.subject_id.in_(subject_ids)
-    ).all()
+    recommendation_records = (
+        db.query(Recommendation)
+        .filter(
+            Recommendation.subject_id.in_(
+                assigned_subject_ids
+            )
+        )
+        .order_by(
+            Recommendation.created_at.desc()
+        )
+        .all()
+    )
+
 
     # ========================================================
-    # BUILD STUDENT DATA
+    # STUDENT-WISE DATA
     # ========================================================
 
     students = {}
 
-    # --------------------------------------------------------
-    # HELPER
-    # --------------------------------------------------------
-
-    def create_student_entry(record):
-
-        if record.student_id not in students:
-
-            students[record.student_id] = {
-
-                "student_id":
-                    record.student_id,
-
-                "student_name":
-                    record.student.name,
-
-                "performance_records": [],
-
-                "risk_records": [],
-
-                "predictions": [],
-
-                "recommendations": []
-            }
 
     # --------------------------------------------------------
     # PERFORMANCE
@@ -650,27 +891,64 @@ def get_faculty_intelligence(
 
     for record in performance_records:
 
-        create_student_entry(record)
+        sid = record.student_id
 
-        students[
-            record.student_id
-        ]["performance_records"].append({
+        if sid not in students:
+
+            students[sid] = {
+
+                "student_id":
+                    sid,
+
+                "student_name":
+                    record.student.name
+                    if record.student
+                    else None,
+
+                "performance": [],
+
+                "risk": [],
+
+                "predictions": [],
+
+                "recommendations": []
+            }
+
+
+        students[sid][
+            "performance"
+        ].append({
+
+            "performance_id":
+                record.id,
 
             "subject_id":
-                record.subject.id,
+                record.subject_id,
 
             "subject_name":
-                record.subject.name,
+                record.subject.name
+                if record.subject
+                else None,
 
-            "subject_code":
-                record.subject.code,
+            "attendance_percentage":
+                record.attendance_percentage,
+
+            "marks_percentage":
+                record.marks_percentage,
+
+            "assignment_percentage":
+                record.assignment_percentage,
 
             "overall_percentage":
                 record.overall_percentage,
 
             "performance_level":
-                record.performance_level
+                record.performance_level,
+
+            "pass_status":
+                record.pass_status
         })
+
 
     # --------------------------------------------------------
     # RISK
@@ -678,17 +956,44 @@ def get_faculty_intelligence(
 
     for record in risk_records:
 
-        create_student_entry(record)
+        sid = record.student_id
 
-        students[
-            record.student_id
-        ]["risk_records"].append({
+        if sid not in students:
+
+            students[sid] = {
+
+                "student_id":
+                    sid,
+
+                "student_name":
+                    record.student.name
+                    if record.student
+                    else None,
+
+                "performance": [],
+
+                "risk": [],
+
+                "predictions": [],
+
+                "recommendations": []
+            }
+
+
+        students[sid][
+            "risk"
+        ].append({
+
+            "risk_id":
+                record.id,
 
             "subject_id":
-                record.subject.id,
+                record.subject_id,
 
             "subject_name":
-                record.subject.name,
+                record.subject.name
+                if record.subject
+                else None,
 
             "risk_score":
                 record.risk_score,
@@ -700,31 +1005,53 @@ def get_faculty_intelligence(
                 record.risk_reason
         })
 
+
     # --------------------------------------------------------
-    # FUTURE PREDICTIONS
+    # PREDICTIONS
     # --------------------------------------------------------
 
     for record in prediction_records:
 
-        create_student_entry(record)
+        sid = record.student_id
 
-        students[
-            record.student_id
-        ]["predictions"].append({
+        if sid not in students:
+
+            students[sid] = {
+
+                "student_id":
+                    sid,
+
+                "student_name":
+                    record.student.name
+                    if record.student
+                    else None,
+
+                "performance": [],
+
+                "risk": [],
+
+                "predictions": [],
+
+                "recommendations": []
+            }
+
+
+        students[sid][
+            "predictions"
+        ].append({
 
             "prediction_id":
                 record.id,
 
             "subject_id":
-                record.subject.id,
+                record.subject_id,
 
             "subject_name":
-                record.subject.name,
+                record.subject.name
+                if record.subject
+                else None,
 
-            "prediction_type":
-                record.prediction_type,
-
-            "predicted_final_exam_percentage":
+            "predicted_performance":
                 record.predicted_performance,
 
             "predicted_level":
@@ -733,9 +1060,13 @@ def get_faculty_intelligence(
             "model_name":
                 record.model_name,
 
+            "prediction_type":
+                record.prediction_type,
+
             "created_at":
                 record.created_at
         })
+
 
     # --------------------------------------------------------
     # RECOMMENDATIONS
@@ -743,20 +1074,44 @@ def get_faculty_intelligence(
 
     for record in recommendation_records:
 
-        create_student_entry(record)
+        sid = record.student_id
 
-        students[
-            record.student_id
-        ]["recommendations"].append({
+        if sid not in students:
+
+            students[sid] = {
+
+                "student_id":
+                    sid,
+
+                "student_name":
+                    record.student.name
+                    if record.student
+                    else None,
+
+                "performance": [],
+
+                "risk": [],
+
+                "predictions": [],
+
+                "recommendations": []
+            }
+
+
+        students[sid][
+            "recommendations"
+        ].append({
 
             "recommendation_id":
                 record.id,
 
             "subject_id":
-                record.subject.id,
+                record.subject_id,
 
             "subject_name":
-                record.subject.name,
+                record.subject.name
+                if record.subject
+                else None,
 
             "recommendation":
                 record.recommendation_text,
@@ -765,294 +1120,278 @@ def get_faculty_intelligence(
                 record.recommendation_type,
 
             "priority":
-                record.priority
+                record.priority,
+
+            "created_at":
+                record.created_at
         })
 
+
     # ========================================================
-    # CALCULATE STUDENT SUMMARY
+    # RISK PRIORITY
     # ========================================================
 
-    student_results = []
+    risk_priority = {
 
-    high_risk = 0
-    medium_risk = 0
-    low_risk = 0
+        "High": 3,
+
+        "Medium": 2,
+
+        "Low": 1
+    }
+
 
     for student_data in students.values():
 
-        performance_for_student = (
-            student_data["performance_records"]
-        )
+        risk_levels = [
 
-        risk_for_student = (
-            student_data["risk_records"]
-        )
+            item["risk_level"]
 
-        predictions_for_student = (
-            student_data["predictions"]
-        )
+            for item
+            in student_data["risk"]
 
-        # ----------------------------------------------------
-        # AVERAGE PERFORMANCE
-        # ----------------------------------------------------
+            if item.get("risk_level")
+        ]
 
-        if performance_for_student:
 
-            average_performance = round(
-                sum(
-                    item["overall_percentage"]
-                    for item in performance_for_student
-                )
-                / len(performance_for_student),
-                2
+        if risk_levels:
+
+            highest_risk = max(
+
+                risk_levels,
+
+                key=lambda level:
+                    risk_priority.get(
+                        level,
+                        0
+                    )
             )
 
         else:
 
-            average_performance = None
+            highest_risk = "Low"
 
-        # ----------------------------------------------------
-        # RISK LEVEL
-        # ----------------------------------------------------
 
-        if not risk_for_student:
+        student_data[
+            "overall_risk_level"
+        ] = highest_risk
 
-            risk_level = "Not Calculated"
-
-        elif any(
-            item["risk_level"] == "High"
-            for item in risk_for_student
-        ):
-
-            risk_level = "High"
-
-        elif any(
-            item["risk_level"] == "Medium"
-            for item in risk_for_student
-        ):
-
-            risk_level = "Medium"
-
-        else:
-
-            risk_level = "Low"
-
-        if risk_level == "High":
-
-            high_risk += 1
-
-        elif risk_level == "Medium":
-
-            medium_risk += 1
-
-        elif risk_level == "Low":
-
-            low_risk += 1
-
-        # ----------------------------------------------------
-        # LATEST FUTURE PREDICTION
-        # ----------------------------------------------------
-
-        future_prediction = None
-
-        if predictions_for_student:
-
-            future_prediction = (
-                predictions_for_student[0]
-            )
-
-        # ----------------------------------------------------
-        # FINAL STUDENT RESULT
-        # ----------------------------------------------------
-
-        student_results.append({
-
-            "student_id":
-                student_data["student_id"],
-
-            "student_name":
-                student_data["student_name"],
-
-            "average_performance":
-                average_performance,
-
-            "risk_level":
-                risk_level,
-
-            "future_prediction":
-                future_prediction,
-
-            "performance":
-                performance_for_student,
-
-            "risk":
-                risk_for_student,
-
-            "predictions":
-                predictions_for_student,
-
-            "recommendations":
-                student_data["recommendations"]
-        })
 
     # ========================================================
-    # FINAL RESPONSE
+    # OVERVIEW
     # ========================================================
+
+    high_risk_students = sum(
+
+        1
+
+        for student_data
+        in students.values()
+
+        if student_data.get(
+            "overall_risk_level"
+        ) == "High"
+    )
+
+
+    medium_risk_students = sum(
+
+        1
+
+        for student_data
+        in students.values()
+
+        if student_data.get(
+            "overall_risk_level"
+        ) == "Medium"
+    )
+
+
+    low_risk_students = sum(
+
+        1
+
+        for student_data
+        in students.values()
+
+        if student_data.get(
+            "overall_risk_level"
+        ) == "Low"
+    )
+
 
     return {
 
-        "message":
-            "Faculty student intelligence retrieved successfully",
-
         "faculty": {
 
-            "faculty_id":
-                faculty.faculty_id,
+            "user_id":
+                current_faculty.id,
 
-            "faculty_name":
-                faculty.name
+            "name":
+                current_faculty.name,
+
+            "faculty_id":
+                faculty.faculty_id
         },
 
-        "assigned_subjects": [
-
-            {
-
-                "subject_id":
-                    item.subject.id,
-
-                "subject_name":
-                    item.subject.name,
-
-                "subject_code":
-                    item.subject.code
-            }
-
-            for item in faculty_subjects
-        ],
+        "assigned_subjects":
+            assigned_subject_ids,
 
         "overview": {
 
             "total_students":
-                len(student_results),
+                len(students),
 
-            "high_risk_students":
-                high_risk,
+            "total_performance_records":
+                len(performance_records),
 
-            "medium_risk_students":
-                medium_risk,
+            "total_risk_records":
+                len(risk_records),
 
-            "low_risk_students":
-                low_risk
+            "total_predictions":
+                len(prediction_records),
+
+            "total_recommendations":
+                len(recommendation_records),
+
+            "risk_distribution": {
+
+                "High":
+                    high_risk_students,
+
+                "Medium":
+                    medium_risk_students,
+
+                "Low":
+                    low_risk_students
+            }
         },
 
         "students":
-            student_results
+            list(students.values())
     }
 
 
 # ============================================================
 # ADMIN INTELLIGENCE
-# ADMIN ONLY
 # ============================================================
 
 @router.get("/admin")
 def get_admin_intelligence(
+
     db: Session = Depends(get_db),
-    current_admin=Depends(require_admin)
+
+    current_admin=Depends(
+        require_admin
+    )
 ):
 
     # ========================================================
-    # GET DATA
+    # LOAD DATA
     # ========================================================
 
-    performance_records = db.query(
-        Performance
-    ).all()
+    performance_records = (
+        db.query(Performance)
+        .all()
+    )
 
-    risk_records = db.query(
-        StudentRisk
-    ).all()
 
-    # Future predictions only
-    prediction_records = db.query(
-        Prediction
-    ).filter(
-        Prediction.prediction_type ==
+    risk_records = (
+        db.query(StudentRisk)
+        .all()
+    )
+
+
+    prediction_records = (
+        db.query(Prediction)
+        .filter(
+            Prediction.prediction_type ==
             "Future Final Exam Performance"
-    ).order_by(
-        Prediction.created_at.desc()
-    ).all()
+        )
+        .all()
+    )
 
-    recommendation_records = db.query(
-        Recommendation
-    ).all()
+
+    recommendation_records = (
+        db.query(Recommendation)
+        .all()
+    )
+
 
     # ========================================================
-    # UNIQUE STUDENTS
+    # GET UNIQUE STUDENT IDS
     # ========================================================
 
     student_ids = set()
 
+
     for record in performance_records:
-        student_ids.add(record.student_id)
+
+        student_ids.add(
+            record.student_id
+        )
+
 
     for record in risk_records:
-        student_ids.add(record.student_id)
+
+        student_ids.add(
+            record.student_id
+        )
+
 
     for record in prediction_records:
-        student_ids.add(record.student_id)
+
+        student_ids.add(
+            record.student_id
+        )
+
 
     for record in recommendation_records:
-        student_ids.add(record.student_id)
+
+        student_ids.add(
+            record.student_id
+        )
+
+
+    student_ids = list(
+        student_ids
+    )
+
 
     # ========================================================
-    # ACADEMIC OVERVIEW
+    # FIX N+1 QUERY
+    #
+    # BEFORE:
+    # One Student query for every student
+    #
+    # NOW:
+    # One query for all students
     # ========================================================
 
-    if performance_records:
+    students_records = []
 
-        average_attendance = round(
-            sum(
-                record.attendance_percentage
-                for record in performance_records
+    if student_ids:
+
+        students_records = (
+            db.query(Student)
+            .filter(
+                Student.student_id.in_(
+                    student_ids
+                )
             )
-            / len(performance_records),
-            2
+            .all()
         )
 
-        average_marks = round(
-            sum(
-                record.marks_percentage
-                for record in performance_records
-            )
-            / len(performance_records),
-            2
-        )
 
-        average_assignment = round(
-            sum(
-                record.assignment_percentage
-                for record in performance_records
-            )
-            / len(performance_records),
-            2
-        )
+    students_by_id = {
 
-        average_overall = round(
-            sum(
-                record.overall_percentage
-                for record in performance_records
-            )
-            / len(performance_records),
-            2
-        )
+        student.student_id:
+            student
 
-    else:
+        for student
+        in students_records
+    }
 
-        average_attendance = 0
-        average_marks = 0
-        average_assignment = 0
-        average_overall = 0
 
     # ========================================================
     # PERFORMANCE DISTRIBUTION
@@ -1060,237 +1399,265 @@ def get_admin_intelligence(
 
     performance_distribution = {
 
-        "excellent": 0,
-        "good": 0,
-        "average": 0,
-        "poor": 0
+        "Excellent": 0,
+
+        "Good": 0,
+
+        "Average": 0,
+
+        "Poor": 0
     }
+
 
     for record in performance_records:
 
-        level = record.performance_level.lower()
+        level = (
+            record.performance_level
+            or "Unknown"
+        )
 
-        if level == "excellent":
 
-            performance_distribution[
-                "excellent"
-            ] += 1
-
-        elif level == "good":
+        if level in performance_distribution:
 
             performance_distribution[
-                "good"
+                level
             ] += 1
 
-        elif level == "average":
-
-            performance_distribution[
-                "average"
-            ] += 1
-
-        elif level == "poor":
-
-            performance_distribution[
-                "poor"
-            ] += 1
 
     # ========================================================
-    # BUILD STUDENT-WISE INTELLIGENCE
+    # RISK DISTRIBUTION
     # ========================================================
 
-    students = {}
+    risk_distribution = {
+
+        "High": 0,
+
+        "Medium": 0,
+
+        "Low": 0
+    }
+
+
+    for record in risk_records:
+
+        level = (
+            record.risk_level
+            or "Low"
+        )
+
+
+        if level in risk_distribution:
+
+            risk_distribution[
+                level
+            ] += 1
+
+
+    # ========================================================
+    # STUDENT-WISE INTELLIGENCE
+    # ========================================================
+
+    student_intelligence = []
+
 
     for student_id in student_ids:
 
-        student = db.query(Student).filter(
-            Student.student_id == student_id
-        ).first()
+        # ----------------------------------------------------
+        # N+1 FIX
+        # ----------------------------------------------------
+
+        student = students_by_id.get(
+            student_id
+        )
+
 
         if not student:
+
             continue
+
 
         student_performance = [
 
             record
-            for record in performance_records
-            if record.student_id == student_id
 
+            for record
+            in performance_records
+
+            if record.student_id ==
+            student_id
         ]
+
 
         student_risk = [
 
             record
-            for record in risk_records
-            if record.student_id == student_id
 
+            for record
+            in risk_records
+
+            if record.student_id ==
+            student_id
         ]
+
 
         student_predictions = [
 
             record
-            for record in prediction_records
-            if record.student_id == student_id
 
+            for record
+            in prediction_records
+
+            if record.student_id ==
+            student_id
         ]
+
 
         student_recommendations = [
 
             record
-            for record in recommendation_records
-            if record.student_id == student_id
 
+            for record
+            in recommendation_records
+
+            if record.student_id ==
+            student_id
         ]
 
+
         # ----------------------------------------------------
-        # AVERAGE PERFORMANCE
+        # AVERAGES
         # ----------------------------------------------------
 
         if student_performance:
 
-            average_performance = round(
-                sum(
-                    record.overall_percentage
-                    for record in student_performance
-                )
-                / len(student_performance),
+            average_attendance = round(
+
+                float(
+                    np.mean([
+                        record.attendance_percentage
+
+                        for record
+                        in student_performance
+                    ])
+                ),
+
+                2
+            )
+
+
+            average_marks = round(
+
+                float(
+                    np.mean([
+                        record.marks_percentage
+
+                        for record
+                        in student_performance
+                    ])
+                ),
+
+                2
+            )
+
+
+            average_assignment = round(
+
+                float(
+                    np.mean([
+                        record.assignment_percentage
+
+                        for record
+                        in student_performance
+                    ])
+                ),
+
+                2
+            )
+
+
+            average_overall = round(
+
+                float(
+                    np.mean([
+                        record.overall_percentage
+
+                        for record
+                        in student_performance
+                    ])
+                ),
+
                 2
             )
 
         else:
 
-            average_performance = None
+            average_attendance = 0
+
+            average_marks = 0
+
+            average_assignment = 0
+
+            average_overall = 0
+
 
         # ----------------------------------------------------
-        # RISK
+        # HIGHEST RISK
         # ----------------------------------------------------
 
-        risk_scores = []
+        risk_priority = {
 
-        risk_reasons = []
+            "High": 3,
 
-        for risk in student_risk:
+            "Medium": 2,
 
-            risk_scores.append(
-                risk.risk_score
+            "Low": 1
+        }
+
+
+        if student_risk:
+
+            highest_risk_record = max(
+
+                student_risk,
+
+                key=lambda record:
+                    risk_priority.get(
+                        record.risk_level,
+                        0
+                    )
             )
 
-            if risk.risk_reason:
 
-                risk_reasons.append(
-                    risk.risk_reason
-                )
+            overall_risk = (
+                highest_risk_record.risk_level
+            )
 
-        if not student_risk:
-
-            risk_level = "Not Calculated"
-
-        elif any(
-            risk.risk_level == "High"
-            for risk in student_risk
-        ):
-
-            risk_level = "High"
-
-        elif any(
-            risk.risk_level == "Medium"
-            for risk in student_risk
-        ):
-
-            risk_level = "Medium"
+            highest_risk_score = (
+                highest_risk_record.risk_score
+            )
 
         else:
 
-            risk_level = "Low"
+            overall_risk = "Low"
 
-        # ----------------------------------------------------
-        # FUTURE PREDICTION
-        # ----------------------------------------------------
+            highest_risk_score = 0
 
-        future_prediction = None
-
-        if student_predictions:
-
-            prediction = student_predictions[0]
-
-            future_prediction = {
-
-                "prediction_id":
-                    prediction.id,
-
-                "subject_id":
-                    prediction.subject_id,
-
-                "predicted_final_exam_percentage":
-                    prediction.predicted_performance,
-
-                "predicted_level":
-                    prediction.predicted_level,
-
-                "model_name":
-                    prediction.model_name,
-
-                "created_at":
-                    prediction.created_at
-            }
 
         # ----------------------------------------------------
         # EARLY WARNING
         # ----------------------------------------------------
 
-        warning_reasons = []
-
-        if risk_level == "High":
-
-            warning_reasons.append(
-                "Student has high risk indicators."
-            )
-
-        elif risk_level == "Medium":
-
-            warning_reasons.append(
-                "Student has medium risk indicators."
-            )
-
-        if (
-            average_performance is not None
-            and average_performance < 50
-        ):
-
-            warning_reasons.append(
-                "Average academic performance is below 50%."
-            )
-
-        high_priority_count = len([
-
-            recommendation
-            for recommendation
-            in student_recommendations
-
-            if recommendation.priority == "High"
-
-        ])
-
-        if high_priority_count > 0:
-
-            warning_reasons.append(
-                "Student has high-priority recommendations."
-            )
-
-        if len(student_recommendations) >= 2:
-
-            warning_reasons.append(
-                "Student has multiple improvement recommendations."
-            )
-
         early_warning = (
-            len(warning_reasons) > 0
+
+            overall_risk == "High"
+
+            or average_attendance < 75
+
+            or average_overall < 40
         )
 
-        # ----------------------------------------------------
-        # SAVE STUDENT RESULT
-        # ----------------------------------------------------
 
-        students[student_id] = {
+        student_intelligence.append({
 
             "student_id":
                 student.student_id,
@@ -1298,147 +1665,14 @@ def get_admin_intelligence(
             "student_name":
                 student.name,
 
-            "average_performance":
-                average_performance,
+            "course_id":
+                student.course_id,
 
-            "risk": {
+            "department_id":
+                student.department_id,
 
-                "risk_level":
-                    risk_level,
-
-                "risk_records":
-                    len(student_risk),
-
-                "average_risk_score":
-                    round(
-                        sum(risk_scores)
-                        / len(risk_scores),
-                        2
-                    )
-                    if risk_scores
-                    else None,
-
-                "reasons":
-                    list(set(risk_reasons))
-            },
-
-            "future_prediction":
-                future_prediction,
-
-            "recommendation_count":
-                len(student_recommendations),
-
-            "early_warning": {
-
-                "required":
-                    early_warning,
-
-                "reasons":
-                    warning_reasons
-            }
-        }
-
-    # ========================================================
-    # RISK OVERVIEW
-    # ========================================================
-
-    high_risk_students = 0
-    medium_risk_students = 0
-    low_risk_students = 0
-
-    for student in students.values():
-
-        level = student[
-            "risk"
-        ]["risk_level"]
-
-        if level == "High":
-
-            high_risk_students += 1
-
-        elif level == "Medium":
-
-            medium_risk_students += 1
-
-        elif level == "Low":
-
-            low_risk_students += 1
-
-    # ========================================================
-    # EARLY WARNING STUDENTS
-    # ========================================================
-
-    early_warning_students = []
-
-    for student in students.values():
-
-        if student[
-            "early_warning"
-        ]["required"]:
-
-            early_warning_students.append({
-
-                "student_id":
-                    student["student_id"],
-
-                "student_name":
-                    student["student_name"],
-
-                "average_performance":
-                    student["average_performance"],
-
-                "risk_level":
-                    student["risk"]["risk_level"],
-
-                "recommendation_count":
-                    student["recommendation_count"],
-
-                "reasons":
-                    student[
-                        "early_warning"
-                    ]["reasons"]
-            })
-
-    # ========================================================
-    # FINAL RESPONSE
-    # ========================================================
-
-    return {
-
-        "message":
-            "Admin student intelligence retrieved successfully",
-
-        "overview": {
-
-            "total_students":
-                len(students),
-
-            "students_with_performance":
-                len({
-                    record.student_id
-                    for record in performance_records
-                }),
-
-            "students_with_risk":
-                len({
-                    record.student_id
-                    for record in risk_records
-                }),
-
-            "students_with_predictions":
-                len({
-                    record.student_id
-                    for record in prediction_records
-                }),
-
-            "students_with_recommendations":
-                len({
-                    record.student_id
-                    for record in recommendation_records
-                })
-        },
-
-        "academic_overview": {
+            "semester":
+                student.semester,
 
             "average_attendance":
                 average_attendance,
@@ -1450,72 +1684,216 @@ def get_admin_intelligence(
                 average_assignment,
 
             "average_overall_performance":
-                average_overall
-        },
+                average_overall,
 
-        "performance_distribution":
-            performance_distribution,
+            "risk_level":
+                overall_risk,
 
-        "risk_overview": {
+            "risk_score":
+                highest_risk_score,
 
-            "high_risk_students":
-                high_risk_students,
+            "future_prediction_count":
+                len(student_predictions),
 
-            "medium_risk_students":
-                medium_risk_students,
+            "recommendation_count":
+                len(student_recommendations),
 
-            "low_risk_students":
-                low_risk_students
-        },
+            "early_warning":
+                early_warning
+        })
 
-        "prediction_overview": {
+
+    # ========================================================
+    # EARLY WARNING STUDENTS
+    # ========================================================
+
+    early_warning_students = [
+
+        student
+
+        for student
+        in student_intelligence
+
+        if student["early_warning"]
+    ]
+
+
+    # ========================================================
+    # OVERALL AVERAGES
+    # ========================================================
+
+    if performance_records:
+
+        overall_average_attendance = round(
+
+            float(
+                np.mean([
+                    record.attendance_percentage
+
+                    for record
+                    in performance_records
+                ])
+            ),
+
+            2
+        )
+
+
+        overall_average_marks = round(
+
+            float(
+                np.mean([
+                    record.marks_percentage
+
+                    for record
+                    in performance_records
+                ])
+            ),
+
+            2
+        )
+
+
+        overall_average_assignment = round(
+
+            float(
+                np.mean([
+                    record.assignment_percentage
+
+                    for record
+                    in performance_records
+                ])
+            ),
+
+            2
+        )
+
+
+        overall_average_performance = round(
+
+            float(
+                np.mean([
+                    record.overall_percentage
+
+                    for record
+                    in performance_records
+                ])
+            ),
+
+            2
+        )
+
+    else:
+
+        overall_average_attendance = 0
+
+        overall_average_marks = 0
+
+        overall_average_assignment = 0
+
+        overall_average_performance = 0
+
+
+    # ========================================================
+    # RETURN ADMIN INTELLIGENCE
+    # ========================================================
+
+    return {
+
+        "overview": {
+
+            "total_students":
+                len(student_intelligence),
+
+            "total_performance_records":
+                len(performance_records),
+
+            "total_risk_records":
+                len(risk_records),
 
             "total_future_predictions":
-                len(prediction_records)
-        },
-
-        "recommendation_overview": {
+                len(prediction_records),
 
             "total_recommendations":
                 len(recommendation_records)
         },
 
+        "academic_overview": {
+
+            "average_attendance":
+                overall_average_attendance,
+
+            "average_marks":
+                overall_average_marks,
+
+            "average_assignment":
+                overall_average_assignment,
+
+            "average_overall_performance":
+                overall_average_performance
+        },
+
+        "performance_distribution":
+            performance_distribution,
+
+        "risk_overview":
+            risk_distribution,
+
+        "prediction_count":
+            len(prediction_records),
+
+        "recommendation_count":
+            len(recommendation_records),
+
         "early_warning": {
 
-            "total_students":
-                len(early_warning_students),
+            "total":
+                len(
+                    early_warning_students
+                ),
 
             "students":
                 early_warning_students
         },
 
         "students":
-            list(students.values())
+            student_intelligence
     }
 
 
 # ============================================================
 # ADMIN STUDENT SEGMENTATION
-# ADMIN ONLY
 # ============================================================
 
 @router.get("/admin/segmentation")
 def get_admin_student_segmentation(
+
     db: Session = Depends(get_db),
-    current_admin=Depends(require_admin)
+
+    current_admin=Depends(
+        require_admin
+    )
 ):
 
-    # --------------------------------------------------------
-    # GET PERFORMANCE RECORDS
-    # --------------------------------------------------------
+    # ========================================================
+    # GET ALL PERFORMANCE
+    # ========================================================
 
-    performance_records = db.query(
-        Performance
-    ).all()
+    performance_records = (
+        db.query(Performance)
+        .all()
+    )
+
+
+    # ========================================================
+    # CHECK DATA
+    # ========================================================
 
     if not performance_records:
 
         return {
+
+            "available": False,
 
             "message":
                 "No performance data available for segmentation.",
@@ -1523,21 +1901,27 @@ def get_admin_student_segmentation(
             "total_students":
                 0,
 
-            "students":
-                []
+            "segments": [],
+
+            "students": []
         }
 
+
     # ========================================================
-    # AGGREGATE STUDENT DATA
+    # AGGREGATE PERFORMANCE BY STUDENT
     # ========================================================
 
     student_data = {}
 
+
     for record in performance_records:
 
-        if record.student_id not in student_data:
+        sid = record.student_id
 
-            student_data[record.student_id] = {
+
+        if sid not in student_data:
+
+            student_data[sid] = {
 
                 "attendance": [],
 
@@ -1548,183 +1932,253 @@ def get_admin_student_segmentation(
                 "overall": []
             }
 
-        student_data[
-            record.student_id
-        ]["attendance"].append(
+
+        student_data[sid][
+            "attendance"
+        ].append(
             record.attendance_percentage
         )
 
-        student_data[
-            record.student_id
-        ]["marks"].append(
+
+        student_data[sid][
+            "marks"
+        ].append(
             record.marks_percentage
         )
 
-        student_data[
-            record.student_id
-        ]["assignment"].append(
+
+        student_data[sid][
+            "assignment"
+        ].append(
             record.assignment_percentage
         )
 
-        student_data[
-            record.student_id
-        ]["overall"].append(
+
+        student_data[sid][
+            "overall"
+        ].append(
             record.overall_percentage
         )
 
-    # ========================================================
-    # CREATE ML FEATURES
-    # ========================================================
-
-    student_ids = []
-    features = []
-
-    for student_id, data in student_data.items():
-
-        student_ids.append(
-            student_id
-        )
-
-        features.append([
-
-            sum(data["attendance"])
-            / len(data["attendance"]),
-
-            sum(data["marks"])
-            / len(data["marks"]),
-
-            sum(data["assignment"])
-            / len(data["assignment"]),
-
-            sum(data["overall"])
-            / len(data["overall"])
-        ])
 
     # ========================================================
-    # MINIMUM 3 STUDENTS
+    # MINIMUM STUDENTS
     # ========================================================
 
-    if len(features) < 3:
+    if len(student_data) < 3:
 
         return {
 
-            "message": (
-                "At least 3 students with performance "
-                "data are required for K-Means segmentation."
-            ),
+            "available": False,
+
+            "message":
+                "At least 3 students are required for K-Means segmentation.",
 
             "total_students":
-                len(features),
+                len(student_data),
 
-            "students":
-                []
+            "segments": [],
+
+            "students": []
         }
+
+
+    # ========================================================
+    # BUILD FEATURE MATRIX
+    # ========================================================
+
+    student_ids = []
+
+    feature_rows = []
+
+
+    for sid, values in student_data.items():
+
+        avg_attendance = float(
+            np.mean(
+                values["attendance"]
+            )
+        )
+
+
+        avg_marks = float(
+            np.mean(
+                values["marks"]
+            )
+        )
+
+
+        avg_assignment = float(
+            np.mean(
+                values["assignment"]
+            )
+        )
+
+
+        avg_overall = float(
+            np.mean(
+                values["overall"]
+            )
+        )
+
+
+        student_ids.append(
+            sid
+        )
+
+
+        feature_rows.append([
+
+            avg_attendance,
+
+            avg_marks,
+
+            avg_assignment,
+
+            avg_overall
+        ])
+
+
+    X = np.array(
+        feature_rows,
+        dtype=float
+    )
+
 
     # ========================================================
     # K-MEANS
     # ========================================================
 
     kmeans = KMeans(
+
         n_clusters=3,
-        n_init=10,
-        random_state=42
+
+        random_state=42,
+
+        n_init=10
     )
 
-    cluster_labels = kmeans.fit_predict(
-        features
+
+    cluster_labels = (
+        kmeans.fit_predict(X)
     )
+
 
     # ========================================================
-    # CLUSTER SCORES
+    # CLUSTER NAMES
     # ========================================================
 
     cluster_scores = {}
 
-    for cluster_number in range(3):
 
-        cluster_students = [
-
-            features[index]
-
-            for index in range(
-                len(features)
-            )
-
-            if cluster_labels[index]
-            == cluster_number
-        ]
-
-        if cluster_students:
-
-            cluster_average = sum(
-
-                (
-                    row[0]
-                    + row[1]
-                    + row[2]
-                    + row[3]
-                ) / 4
-
-                for row in cluster_students
-
-            ) / len(cluster_students)
-
-        else:
-
-            cluster_average = 0
+    for cluster_index, center in enumerate(
+        kmeans.cluster_centers_
+    ):
 
         cluster_scores[
-            cluster_number
-        ] = cluster_average
+            cluster_index
+        ] = float(
+            np.mean(center)
+        )
 
-    # ========================================================
-    # SORT CLUSTERS
-    # ========================================================
 
     sorted_clusters = sorted(
+
         cluster_scores,
-        key=cluster_scores.get,
-        reverse=True
+
+        key=cluster_scores.get
     )
 
-    cluster_names = {
 
-        sorted_clusters[0]:
-            "High Performance",
+    cluster_names = {}
 
-        sorted_clusters[1]:
-            "Medium Performance",
 
-        sorted_clusters[2]:
-            "Low Performance"
+    if len(sorted_clusters) >= 1:
+
+        cluster_names[
+            sorted_clusters[0]
+        ] = "Low"
+
+
+    if len(sorted_clusters) >= 2:
+
+        cluster_names[
+            sorted_clusters[1]
+        ] = "Medium"
+
+
+    if len(sorted_clusters) >= 3:
+
+        cluster_names[
+            sorted_clusters[2]
+        ] = "High"
+
+
+    # ========================================================
+    # FIX N+1 QUERY
+    #
+    # BEFORE:
+    # Student query inside loop
+    #
+    # NOW:
+    # ONE QUERY FOR ALL STUDENTS
+    # ========================================================
+
+    students_records = (
+        db.query(Student)
+        .filter(
+            Student.student_id.in_(
+                student_ids
+            )
+        )
+        .all()
+    )
+
+
+    students_by_id = {
+
+        student.student_id:
+            student
+
+        for student
+        in students_records
     }
 
+
     # ========================================================
-    # BUILD RESULTS
+    # BUILD STUDENT RESULTS
     # ========================================================
 
-    results = []
+    student_results = []
+
 
     for index, student_id in enumerate(
         student_ids
     ):
 
-        student = db.query(
-            Student
-        ).filter(
-            Student.student_id == student_id
-        ).first()
+        # ----------------------------------------------------
+        # N+1 FIX
+        # ----------------------------------------------------
+
+        student = students_by_id.get(
+            student_id
+        )
+
 
         if not student:
+
             continue
+
 
         cluster = int(
             cluster_labels[index]
         )
 
-        data = features[index]
 
-        results.append({
+        features = X[index]
+
+
+        student_results.append({
 
             "student_id":
                 student.student_id,
@@ -1732,24 +2186,49 @@ def get_admin_student_segmentation(
             "student_name":
                 student.name,
 
-            "segment":
-                cluster_names[cluster],
+            "course_id":
+                student.course_id,
+
+            "department_id":
+                student.department_id,
+
+            "semester":
+                student.semester,
 
             "cluster":
                 cluster,
 
+            "segment":
+                cluster_names.get(
+                    cluster,
+                    "Unknown"
+                ),
+
             "average_attendance":
-                round(data[0], 2),
+                round(
+                    float(features[0]),
+                    2
+                ),
 
             "average_marks":
-                round(data[1], 2),
+                round(
+                    float(features[1]),
+                    2
+                ),
 
             "average_assignment":
-                round(data[2], 2),
+                round(
+                    float(features[2]),
+                    2
+                ),
 
             "average_overall_performance":
-                round(data[3], 2)
+                round(
+                    float(features[3]),
+                    2
+                )
         })
+
 
     # ========================================================
     # SEGMENT SUMMARY
@@ -1757,71 +2236,57 @@ def get_admin_student_segmentation(
 
     segment_summary = {
 
-        "high_performance":
-            0,
+        "High": 0,
 
-        "medium_performance":
-            0,
+        "Medium": 0,
 
-        "low_performance":
-            0
+        "Low": 0
     }
 
-    for student in results:
 
-        if student["segment"] == "High Performance":
+    for result in student_results:
 
-            segment_summary[
-                "high_performance"
-            ] += 1
+        segment = result["segment"]
 
-        elif student["segment"] == "Medium Performance":
+
+        if segment in segment_summary:
 
             segment_summary[
-                "medium_performance"
+                segment
             ] += 1
 
-        elif student["segment"] == "Low Performance":
-
-            segment_summary[
-                "low_performance"
-            ] += 1
 
     # ========================================================
-    # FINAL RESPONSE
+    # RETURN SEGMENTATION
     # ========================================================
 
     return {
 
-        "message":
-            "Student segmentation completed successfully",
+        "available": True,
 
-        "model": {
+        "method":
+            "K-Means Clustering",
 
-            "algorithm":
-                "K-Means Clustering",
+        "clusters":
+            3,
 
-            "clusters":
-                3,
+        "features": [
 
-            "features": [
+            "average_attendance",
 
-                "attendance_percentage",
+            "average_marks",
 
-                "marks_percentage",
+            "average_assignment",
 
-                "assignment_percentage",
-
-                "overall_percentage"
-            ]
-        },
+            "average_overall_performance"
+        ],
 
         "total_students":
-            len(results),
+            len(student_results),
 
         "segment_summary":
             segment_summary,
 
         "students":
-            results
+            student_results
     }

@@ -16,6 +16,10 @@ from app.utils.auth import (
     require_student
 )
 
+from app.services.performance_service import (
+    calculate_and_update_performance
+)
+
 
 router = APIRouter(
     prefix="/assignments",
@@ -211,6 +215,33 @@ def add_assignment(
         )
 
 
+
+    # ------------------------------------------------
+    # AUTOMATIC PERFORMANCE + RISK UPDATE
+    # ------------------------------------------------
+
+    try:
+
+        calculate_and_update_performance(
+            db=db,
+            student_id=student_id,
+            subject_id=subject_id
+        )
+
+        automatic_processing = {
+            "performance": "updated",
+            "risk": "updated"
+        }
+
+    except Exception as e:
+
+        automatic_processing = {
+            "performance": "failed",
+            "risk": "not_updated",
+            "error": str(e)
+        }
+
+
     # ------------------------------------------------
     # RESPONSE
     # ------------------------------------------------
@@ -237,7 +268,9 @@ def add_assignment(
 
         "submission_date": assignment.submission_date,
 
-        "status": assignment.status
+        "status": assignment.status,
+
+        "automatic_processing": automatic_processing
     }
 
 

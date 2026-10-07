@@ -20,9 +20,8 @@ from app.utils.auth import require_admin, require_faculty, require_student, get_
 
 from app.database.models import Book, BookCopy, BookIssue
 from app.utils.auth import require_librarian, require_accountant
-from sqlalchemy import func
 
-from app.database.models import Librarian, LibraryFinePayment, LibraryFine, Accountant, StudentFee,  FeePayment
+from app.database.models import Librarian, LibraryFinePayment, LibraryFine, Accountant, StudentFee
 
 router = APIRouter(
     prefix="/dashboard",
@@ -313,15 +312,19 @@ def student_dashboard(
     current_user=Depends(require_student)
 ):
 
+    # =====================================================
+    # STUDENT PROFILE
+    # =====================================================
+
     student = db.query(Student).filter(
         Student.user_id == current_user.id
     ).first()
 
     if not student:
-        return {
-            "dashboard": "Student Dashboard",
-            "message": "Student profile not found"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Student profile not found"
+        )
 
     student_id = student.student_id
 
@@ -342,34 +345,30 @@ def student_dashboard(
     ).all()
 
     # =====================================================
-    # FUTURE PERFORMANCE PREDICTIONS
-    # Only final exam future predictions
-    # =====================================================
-
-    prediction_records = db.query(Prediction).filter(
-        Prediction.student_id == student_id,
-        Prediction.prediction_type == "Future Final Exam Performance"
-    ).order_by(
-        Prediction.created_at.desc()
-    ).all()
-
-    # =====================================================
-    # RECOMMENDATIONS
-    # =====================================================
-
-    recommendation_records = db.query(Recommendation).filter(
-        Recommendation.student_id == student_id
-    ).order_by(
-        Recommendation.created_at.desc()
-    ).all()
-
-    # =====================================================
     # ATTENDANCE
     # =====================================================
 
     attendance_records = db.query(Attendance).filter(
         Attendance.student_id == student_id
     ).all()
+
+    if attendance_records:
+
+        present_count = sum(
+            1
+            for record in attendance_records
+            if record.status
+            and record.status.lower() == "present"
+        )
+
+        attendance_percentage = round(
+            (present_count / len(attendance_records)) * 100,
+            2
+        )
+
+    else:
+
+        attendance_percentage = 0
 
     # =====================================================
     # MARKS
@@ -379,115 +378,300 @@ def student_dashboard(
         Marks.student_id == student_id
     ).all()
 
-    # =====================================================
-    # OVERALL ATTENDANCE
-    # =====================================================
-
-    if attendance_records:
-
-        present_count = sum(
-            1
-            for record in attendance_records
-            if record.status.lower() == "present"
-        )
-
-        attendance_percentage = round(
-            (present_count / len(attendance_records)) * 100,
-            2
-        )
-
-    else:
-        attendance_percentage = 0
-
-    # =====================================================
-    # OVERALL MARKS
-    # =====================================================
-
     valid_marks_records = [
         record
         for record in marks_records
-        if record.max_marks > 0
+        if record.max_marks
+        and record.max_marks > 0
     ]
 
     if valid_marks_records:
 
         marks_percentage = round(
             sum(
-                (record.marks_obtained / record.max_marks) * 100
+                (
+                    record.marks_obtained /
+                    record.max_marks
+                ) * 100
                 for record in valid_marks_records
             ) / len(valid_marks_records),
             2
         )
 
     else:
+
         marks_percentage = 0
+
+    # =====================================================
+    # SAVED PREDICTIONS
+    # =====================================================
+
+    prediction_records = db.query(Prediction).filter(
+        Prediction.student_id == student_id,
+        Prediction.prediction_type ==
+        "Future Final Exam Performance"
+    ).order_by(
+        Prediction.created_at.desc()
+    ).all()
+
+    # =====================================================
+    # RECOMMENDATIONS
+    # =====================================================
+
+    recommendation_records = db.query(
+        Recommendation
+    ).filter(
+        Recommendation.student_id == student_id
+    ).order_by(
+        Recommendation.created_at.desc()
+    ).all()
+
+    # =====================================================
+    # SUBJECT-WISE DASHBOARD
+    # =====================================================
+
+    subject_dashboard = []
+
+    for performance in performance_records:
+
+        subject = db.query(Subject).filter(
+            Subject.id == performance.subject_id
+        ).first()
+
+        if not subject:
+            continue
+
+        # =================================================
+        # RISK
+        # =================================================
+
+        risk = db.query(StudentRisk).filter(
+            StudentRisk.student_id == student_id,
+            StudentRisk.subject_id == performance.subject_id
+        ).first()
+
+        # =================================================
+        # PREDICTION
+        # =================================================
+
+        prediction = db.query(Prediction).filter(
+            Prediction.student_id == student_id,
+            Prediction.subject_id == performance.subject_id,
+            Prediction.prediction_type ==
+            "Future Final Exam Performance"
+        ).order_by(
+            Prediction.created_at.desc()
+        ).first()
+
+        # =================================================
+        # FINAL EXAM
+        # =================================================
+
+        final_mark = db.query(Marks).filter(
+            Marks.student_id == student_id,
+            Marks.subject_id == performance.subject_id,
+            Marks.exam_type.ilike("%final%")
+        ).first()
+
+        # =================================================
+        # ACTUAL OR PREDICTED RESULT
+        # =================================================
+
+        if final_mark:
+
+            actual_percentage = round(
+                (
+                    final_mark.marks_obtained /
+                    final_mark.max_marks
+                ) * 100,
+                2
+            )
+
+            if actual_percentage >= 40:
+                result_level = "Pass"
+            else:
+                result_level = "Fail"
+
+            final_exam_result = {
+                "result_type": "Actual",
+                "percentage": actual_percentage,
+                "level": result_level
+            }
+
+        elif prediction:
+
+            final_exam_result = {
+                "result_type": "Predicted",
+                "percentage": prediction.predicted_performance,
+                "level": prediction.predicted_level
+            }
+
+        else:
+
+            final_exam_result = {
+                "result_type": "Not Available",
+                "percentage": None,
+                "level": None
+            }
+
+        # =================================================
+        # SUBJECT DATA
+        # =================================================
+
+        subject_dashboard.append({
+
+            "subject": {
+                "subject_id": subject.id,
+                "subject_name": subject.name,
+                "subject_code": subject.code
+            },
+
+            "performance": {
+                "attendance_percentage":
+                    performance.attendance_percentage,
+
+                "marks_percentage":
+                    performance.marks_percentage,
+
+                "assignment_percentage":
+                    performance.assignment_percentage,
+
+                "overall_percentage":
+                    performance.overall_percentage,
+
+                "performance_level":
+                    performance.performance_level,
+
+                "pass_status":
+                    performance.pass_status
+            },
+
+            "risk": {
+                "risk_score":
+                    risk.risk_score
+                    if risk else None,
+
+                "risk_level":
+                    risk.risk_level
+                    if risk else None,
+
+                "risk_reason":
+                    risk.risk_reason
+                    if risk else None
+            },
+
+            "final_exam": final_exam_result
+        })
 
     # =====================================================
     # RESPONSE
     # =====================================================
 
     return {
+
         "dashboard": "Student Dashboard",
 
+        # =================================================
+        # STUDENT INFORMATION
+        # =================================================
+
         "student": {
+
             "student_id": student.student_id,
+
             "student_name": student.name,
-            "semester": student.semester
+
+            "semester": student.semester,
+
+            "course": {
+                "course_id": student.course.id,
+                "course_name": student.course.name,
+                "course_code": student.course.code
+            },
+
+            "department": {
+                "department_id": student.department.id,
+                "department_name": student.department.name,
+                "department_code": student.department.code
+            }
         },
+
+        # =================================================
+        # OVERALL OVERVIEW
+        # =================================================
 
         "overview": {
-            "attendance_percentage": attendance_percentage,
-            "marks_percentage": marks_percentage,
-            "performance_records": len(performance_records),
-            "predictions": len(prediction_records),
-            "recommendations": len(recommendation_records)
+
+            "attendance_percentage":
+                attendance_percentage,
+
+            "marks_percentage":
+                marks_percentage,
+
+            "performance_records":
+                len(performance_records),
+
+            "predictions":
+                len(prediction_records),
+
+            "recommendations":
+                len(recommendation_records)
         },
 
-        "performance": [
-            {
-                "subject_id": record.subject_id,
-                "attendance_percentage": record.attendance_percentage,
-                "marks_percentage": record.marks_percentage,
-                "assignment_percentage": record.assignment_percentage,
-                "overall_percentage": record.overall_percentage,
-                "performance_level": record.performance_level
-            }
-            for record in performance_records
-        ],
+        # =================================================
+        # SUBJECT-WISE DATA
+        # =================================================
 
-        "risk": [
-            {
-                "subject_id": record.subject_id,
-                "risk_score": record.risk_score,
-                "risk_level": record.risk_level,
-                "risk_reason": record.risk_reason
-            }
-            for record in risk_records
-        ],
+        "subjects": subject_dashboard,
+
+        # =================================================
+        # PREDICTIONS
+        # =================================================
 
         "predictions": [
+
             {
-                "subject_id": record.subject_id,
-                "predicted_performance": record.predicted_performance,
-                "predicted_level": record.predicted_level,
-                "model_name": record.model_name
+                "subject_id":
+                    record.subject_id,
+
+                "predicted_performance":
+                    record.predicted_performance,
+
+                "predicted_level":
+                    record.predicted_level,
+
+                "model_name":
+                    record.model_name
+
             }
+
             for record in prediction_records
         ],
 
+        # =================================================
+        # RECOMMENDATIONS
+        # =================================================
+
         "recommendations": [
+
             {
-                "subject_id": record.subject_id,
-                "recommendation": record.recommendation_text,
-                "type": record.recommendation_type,
-                "priority": record.priority
+                "subject_id":
+                    record.subject_id,
+
+                "recommendation":
+                    record.recommendation_text,
+
+                "type":
+                    record.recommendation_type,
+
+                "priority":
+                    record.priority
+
             }
+
             for record in recommendation_records
         ]
     }
-
-
-
 
 # =========================================================
 # HOD DASHBOARD
@@ -669,8 +853,6 @@ def hod_dashboard(
 
 
 
-
-
 # =========================================================
 # LIBRARIAN DASHBOARD
 # =========================================================
@@ -681,7 +863,10 @@ def librarian_dashboard(
     current_user=Depends(require_librarian)
 ):
 
-    # Get librarian profile
+    # =====================================================
+    # LIBRARIAN PROFILE
+    # =====================================================
+
     librarian = db.query(Librarian).filter(
         Librarian.user_id == current_user.id
     ).first()
@@ -735,6 +920,35 @@ def librarian_dashboard(
         for fine in fines
     )
 
+    # =====================================================
+    # FETCH ALL FINE PAYMENTS IN ONE QUERY
+    # =====================================================
+
+    issue_ids = [
+        fine.issue_id
+        for fine in fines
+    ]
+
+    payments = []
+
+    if issue_ids:
+        payments = db.query(LibraryFinePayment).filter(
+            LibraryFinePayment.issue_id.in_(issue_ids)
+        ).all()
+
+    # =====================================================
+    # CREATE PAYMENT LOOKUP
+    # =====================================================
+
+    payment_by_issue = {
+        payment.issue_id: payment
+        for payment in payments
+    }
+
+    # =====================================================
+    # CALCULATE FINE SUMMARY
+    # =====================================================
+
     total_collected_fine = 0
     total_pending_fine = 0
 
@@ -743,15 +957,17 @@ def librarian_dashboard(
 
     for fine in fines:
 
-        payment = db.query(LibraryFinePayment).filter(
-            LibraryFinePayment.issue_id == fine.issue_id
-        ).first()
+        payment = payment_by_issue.get(
+            fine.issue_id
+        )
 
         if payment:
+
             total_collected_fine += payment.amount
             paid_fines += 1
 
         else:
+
             total_pending_fine += fine.fine_amount
             pending_fines += 1
 
@@ -789,8 +1005,6 @@ def librarian_dashboard(
             "pending_fines": pending_fines
         }
     }
-
-
 
 
 
@@ -852,6 +1066,35 @@ def accountant_dashboard(
         for fine in fines
     )
 
+    # =====================================================
+    # FETCH ALL FINE PAYMENTS IN ONE QUERY
+    # =====================================================
+
+    issue_ids = [
+        fine.issue_id
+        for fine in fines
+    ]
+
+    payments = []
+
+    if issue_ids:
+        payments = db.query(LibraryFinePayment).filter(
+            LibraryFinePayment.issue_id.in_(issue_ids)
+        ).all()
+
+    # =====================================================
+    # CREATE PAYMENT LOOKUP
+    # =====================================================
+
+    payment_by_issue = {
+        payment.issue_id: payment
+        for payment in payments
+    }
+
+    # =====================================================
+    # CALCULATE FINE SUMMARY
+    # =====================================================
+
     total_collected_fine = 0
     total_pending_fine = 0
 
@@ -860,9 +1103,9 @@ def accountant_dashboard(
 
     for fine in fines:
 
-        payment = db.query(LibraryFinePayment).filter(
-            LibraryFinePayment.issue_id == fine.issue_id
-        ).first()
+        payment = payment_by_issue.get(
+            fine.issue_id
+        )
 
         if payment:
 

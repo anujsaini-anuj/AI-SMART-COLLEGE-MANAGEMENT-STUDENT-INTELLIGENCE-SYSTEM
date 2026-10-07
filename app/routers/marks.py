@@ -12,6 +12,9 @@ from app.database.models import (
 )
 from app.utils.auth import require_faculty, require_student
 
+from app.services.performance_service import calculate_and_update_performance
+from app.services.prediction_service import create_historical_ml_record
+
 
 router = APIRouter(
     prefix="/marks",
@@ -19,9 +22,9 @@ router = APIRouter(
 )
 
 
-# ==================================================
-# ADD MARKS
-# ==================================================
+# ============================================================
+# ADD / UPDATE MARKS
+# ============================================================
 
 @router.post("/add")
 def add_marks(
@@ -36,9 +39,9 @@ def add_marks(
     current_faculty=Depends(require_faculty)
 ):
 
-    # ------------------------------------------------
-    # CHECK FACULTY SUBJECT AUTHORIZATION
-    # ------------------------------------------------
+    # --------------------------------------------------------
+    # 1. Faculty-subject authorization
+    # --------------------------------------------------------
 
     faculty_subject = db.query(FacultySubject).filter(
         FacultySubject.subject_id == subject_id,
@@ -53,10 +56,9 @@ def add_marks(
             detail="You are not assigned to this subject"
         )
 
-
-    # ------------------------------------------------
-    # CHECK STUDENT
-    # ------------------------------------------------
+    # --------------------------------------------------------
+    # 2. Student check
+    # --------------------------------------------------------
 
     student = db.query(Student).filter(
         Student.student_id == student_id
@@ -68,10 +70,15 @@ def add_marks(
             detail="Student not found"
         )
 
+    if hasattr(student, "is_active") and not student.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail="Student is inactive"
+        )
 
-    # ------------------------------------------------
-    # CHECK SUBJECT
-    # ------------------------------------------------
+    # --------------------------------------------------------
+    # 3. Subject check
+    # --------------------------------------------------------
 
     subject = db.query(Subject).filter(
         Subject.id == subject_id
@@ -83,21 +90,27 @@ def add_marks(
             detail="Subject not found"
         )
 
+    # --------------------------------------------------------
+    # 4. Validate exam type
+    # --------------------------------------------------------
 
-    # ------------------------------------------------
-    # VALIDATE MAX MARKS
-    # ------------------------------------------------
+    exam_type = exam_type.strip()
+
+    if not exam_type:
+        raise HTTPException(
+            status_code=400,
+            detail="Exam type is required"
+        )
+
+    # --------------------------------------------------------
+    # 5. Validate marks
+    # --------------------------------------------------------
 
     if max_marks <= 0:
         raise HTTPException(
             status_code=400,
             detail="Maximum marks must be greater than 0"
         )
-
-
-    # ------------------------------------------------
-    # VALIDATE OBTAINED MARKS
-    # ------------------------------------------------
 
     if marks_obtained < 0:
         raise HTTPException(
@@ -111,10 +124,21 @@ def add_marks(
             detail="Obtained marks cannot be greater than maximum marks"
         )
 
+    # --------------------------------------------------------
+    # 6. Final exam date is required
+    # --------------------------------------------------------
 
-    # ------------------------------------------------
-    # CHECK DUPLICATE
-    # ------------------------------------------------
+    is_final_exam = "final" in exam_type.lower()
+
+    if is_final_exam and exam_date is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Exam date is required for Final Exam marks"
+        )
+
+    # --------------------------------------------------------
+    # 7. Add OR Update marks
+    # --------------------------------------------------------
 
     existing_marks = db.query(Marks).filter(
         Marks.student_id == student_id,
@@ -122,72 +146,186 @@ def add_marks(
         Marks.exam_type == exam_type
     ).first()
 
+    action = "added"
+
     if existing_marks:
-        raise HTTPException(
-            status_code=400,
-            detail="Marks already added for this student, subject and exam type"
+
+        # Real-life system:
+        # Faculty can correct marks later.
+
+        existing_marks.marks_obtained = marks_obtained
+        existing_marks.max_marks = max_marks
+        existing_marks.exam_date = exam_date
+
+        marks = existing_marks
+        action = "updated"
+
+    else:
+
+        marks = Marks(
+            student_id=student_id,
+            subject_id=subject_id,
+            exam_type=exam_type,
+            marks_obtained=marks_obtained,
+            max_marks=max_marks,
+            exam_date=exam_date
         )
 
+        db.add(marks)
 
-    # ------------------------------------------------
-    # CREATE MARKS
-    # ------------------------------------------------
-
-    marks = Marks(
-        student_id=student_id,
-        subject_id=subject_id,
-        exam_type=exam_type,
-        marks_obtained=marks_obtained,
-        max_marks=max_marks,
-        exam_date=exam_date
-    )
-
-    db.add(marks)
+    # --------------------------------------------------------
+    # 8. Save marks FIRST
+    # --------------------------------------------------------
+    # Important:
+    # Academic marks are primary data.
+    # If ML automation fails later, marks should still remain saved.
 
     try:
+
         db.commit()
         db.refresh(marks)
 
-    except Exception:
+    except Exception as e:
+
         db.rollback()
 
         raise HTTPException(
             status_code=500,
-            detail="Failed to add marks"
+            detail=f"Failed to save marks: {str(e)}"
         )
 
+    # ========================================================
+    # AUTOMATIC ACADEMIC PIPELINE
+    # ========================================================
 
-    # ------------------------------------------------
-    # RESPONSE
-    # ------------------------------------------------
+    automation = {
+        "performance": {
+            "status": "not_run"
+        },
+        "risk": {
+            "status": "not_run"
+        },
+        "ml_record": {
+            "status": "not_required"
+        },
+        "model_training": {
+            "status": "not_required"
+        }
+    }
+
+    # --------------------------------------------------------
+    # 9. Automatically calculate Performance + Risk
+    # --------------------------------------------------------
+
+    try:
+
+        performance_result = calculate_and_update_performance(
+            db=db,
+            student_id=student_id,
+            subject_id=subject_id
+        )
+
+        automation["performance"] = {
+            "status": "updated",
+            "data": performance_result
+        }
+
+        automation["risk"] = {
+            "status": "updated",
+            "message": "Student risk updated automatically"
+        }
+
+    except Exception as e:
+
+        automation["performance"] = {
+            "status": "failed",
+            "error": str(e)
+        }
+
+        automation["risk"] = {
+            "status": "failed",
+            "error": "Risk was not updated because performance calculation failed"
+        }
+
+    # --------------------------------------------------------
+    # 10. Final Exam → Historical ML Record
+    # --------------------------------------------------------
+
+    if is_final_exam:
+
+        try:
+
+            (
+                ml_record,
+                features,
+                final_percentage,
+                training_result
+            ) = create_historical_ml_record(
+                db=db,
+                student_id=student_id,
+                subject_id=subject_id
+            )
+
+            automation["ml_record"] = {
+                "status": "updated",
+                "ml_record_id": ml_record.id,
+                "final_exam_percentage": final_percentage,
+                "features": features
+            }
+
+            automation["model_training"] = {
+                "status": "completed",
+                "result": training_result
+            }
+
+        except Exception as e:
+
+            automation["ml_record"] = {
+                "status": "failed",
+                "error": str(e)
+            }
+
+            automation["model_training"] = {
+                "status": "not_completed",
+                "message": "Marks were saved successfully, but automatic ML processing could not be completed."
+            }
+
+    # --------------------------------------------------------
+    # 11. Response
+    # --------------------------------------------------------
 
     return {
-        "message": "Marks added successfully",
-        "marks_id": marks.id,
-        "student_id": student.student_id,
-        "student_name": student.name,
-        "subject_id": subject.id,
-        "subject_name": subject.name,
-        "exam_type": marks.exam_type,
-        "marks_obtained": marks.marks_obtained,
-        "max_marks": marks.max_marks,
-        "exam_date": marks.exam_date
+        "message": f"Marks {action} successfully",
+
+        "marks": {
+            "marks_id": marks.id,
+            "student_id": student.student_id,
+            "student_name": student.name,
+            "subject_id": subject.id,
+            "subject_name": subject.name,
+            "exam_type": marks.exam_type,
+            "marks_obtained": marks.marks_obtained,
+            "max_marks": marks.max_marks,
+            "percentage": round(
+                (marks.marks_obtained / marks.max_marks) * 100,
+                2
+            ),
+            "exam_date": marks.exam_date
+        },
+
+        "automatic_processing": automation
     }
 
 
-# ==================================================
-# FACULTY - VIEW MARKS
-# ==================================================
+# ============================================================
+# FACULTY VIEW MARKS
+# ============================================================
 
 @router.get("/")
 def get_all_marks(
     db: Session = Depends(get_db),
     current_faculty=Depends(require_faculty)
 ):
-
-    # ------------------------------------------------
-    # GET SUBJECTS ASSIGNED TO CURRENT FACULTY
-    # ------------------------------------------------
 
     assigned_subject_ids = db.query(
         FacultySubject.subject_id
@@ -202,26 +340,16 @@ def get_all_marks(
         for subject_id in assigned_subject_ids
     ]
 
-
-    # ------------------------------------------------
-    # NO ASSIGNED SUBJECT
-    # ------------------------------------------------
-
     if not assigned_subject_ids:
+
         return {
             "total_records": 0,
             "marks": []
         }
 
-
-    # ------------------------------------------------
-    # GET ONLY ASSIGNED SUBJECT MARKS
-    # ------------------------------------------------
-
     marks_records = db.query(Marks).filter(
         Marks.subject_id.in_(assigned_subject_ids)
     ).all()
-
 
     result = []
 
@@ -236,9 +364,12 @@ def get_all_marks(
             "exam_type": marks.exam_type,
             "marks_obtained": marks.marks_obtained,
             "max_marks": marks.max_marks,
+            "percentage": round(
+                (marks.marks_obtained / marks.max_marks) * 100,
+                2
+            ),
             "exam_date": marks.exam_date
         })
-
 
     return {
         "total_records": len(result),
@@ -246,19 +377,15 @@ def get_all_marks(
     }
 
 
-# ==================================================
-# STUDENT - VIEW OWN MARKS
-# ==================================================
+# ============================================================
+# STUDENT VIEW OWN MARKS
+# ============================================================
 
 @router.get("/my-marks")
 def get_my_marks(
     db: Session = Depends(get_db),
     current_student=Depends(require_student)
 ):
-
-    # ------------------------------------------------
-    # GET CURRENT STUDENT PROFILE
-    # ------------------------------------------------
 
     student = db.query(Student).filter(
         Student.user_id == current_student.id
@@ -270,15 +397,9 @@ def get_my_marks(
             detail="Student profile not found"
         )
 
-
-    # ------------------------------------------------
-    # GET ONLY CURRENT STUDENT MARKS
-    # ------------------------------------------------
-
     marks_records = db.query(Marks).filter(
         Marks.student_id == student.student_id
     ).all()
-
 
     result = []
 
@@ -291,9 +412,12 @@ def get_my_marks(
             "exam_type": marks.exam_type,
             "marks_obtained": marks.marks_obtained,
             "max_marks": marks.max_marks,
+            "percentage": round(
+                (marks.marks_obtained / marks.max_marks) * 100,
+                2
+            ),
             "exam_date": marks.exam_date
         })
-
 
     return {
         "student_id": student.student_id,

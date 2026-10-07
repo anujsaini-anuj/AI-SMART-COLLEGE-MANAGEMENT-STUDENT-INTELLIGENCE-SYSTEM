@@ -40,6 +40,67 @@ def _get_subject(
 
 
 # ============================================================
+# BULK LOOKUP HELPERS
+# ============================================================
+
+def _get_students_map(
+    db: Session,
+    student_ids
+):
+    """
+    Load multiple students using ONE database query.
+
+    Returns:
+        {
+            "STU001": Student object,
+            "STU002": Student object
+        }
+    """
+
+    student_ids = list(set(student_ids))
+
+    if not student_ids:
+        return {}
+
+    students = db.query(Student).filter(
+        Student.student_id.in_(student_ids)
+    ).all()
+
+    return {
+        student.student_id: student
+        for student in students
+    }
+
+
+def _get_subjects_map(
+    db: Session,
+    subject_ids
+):
+    """
+    Load multiple subjects using ONE database query.
+
+    Returns:
+        {
+            1: Subject object,
+            2: Subject object
+        }
+    """
+
+    subject_ids = list(set(subject_ids))
+
+    if not subject_ids:
+        return {}
+
+    subjects = db.query(Subject).filter(
+        Subject.id.in_(subject_ids)
+    ).all()
+
+    return {
+        subject.id: subject
+        for subject in subjects
+    }
+
+# ============================================================
 # STUDENT LOOKUP
 # ============================================================
 
@@ -201,11 +262,8 @@ def student_has_subject(
     subject_id: int
 ):
     """
-    Check whether the student belongs to the requested subject.
-
-    Course matching is checked first.
-
-    Existing academic records are also checked.
+    Check whether the subject belongs to
+    the student's course.
     """
 
     student_id = student_id.strip()
@@ -226,58 +284,7 @@ def student_has_subject(
     if not subject:
         return False
 
-    # --------------------------------------------------------
-    # COURSE LEVEL CHECK
-    # --------------------------------------------------------
-
-    if student.course_id != subject.course_id:
-        return False
-
-    # --------------------------------------------------------
-    # ACADEMIC RECORD CHECK
-    # --------------------------------------------------------
-
-    performance = db.query(Performance).filter(
-        Performance.student_id == student_id,
-        Performance.subject_id == subject_id
-    ).first()
-
-    if performance:
-        return True
-
-    attendance = db.query(Attendance).filter(
-        Attendance.student_id == student_id,
-        Attendance.subject_id == subject_id
-    ).first()
-
-    if attendance:
-        return True
-
-    marks = db.query(Marks).filter(
-        Marks.student_id == student_id,
-        Marks.subject_id == subject_id
-    ).first()
-
-    if marks:
-        return True
-
-    risk = db.query(StudentRisk).filter(
-        StudentRisk.student_id == student_id,
-        StudentRisk.subject_id == subject_id
-    ).first()
-
-    if risk:
-        return True
-
-    recommendation = db.query(Recommendation).filter(
-        Recommendation.student_id == student_id,
-        Recommendation.subject_id == subject_id
-    ).first()
-
-    if recommendation:
-        return True
-
-    return False
+    return student.course_id == subject.course_id
 
 
 # ============================================================
@@ -329,40 +336,74 @@ def get_student_performance(
             "message": "Performance data is not available."
         }
 
+    # --------------------------------------------------------
+    # LOAD ALL SUBJECTS IN ONE QUERY
+    # --------------------------------------------------------
+
+    subject_ids = [
+        performance.subject_id
+        for performance in records
+    ]
+
+    subjects_by_id = _get_subjects_map(
+        db,
+        subject_ids
+    )
+
+    # --------------------------------------------------------
+    # BUILD RESULT
+    # --------------------------------------------------------
+
     result = []
 
     for performance in records:
 
-        subject = _get_subject(
-            db,
+        subject = subjects_by_id.get(
             performance.subject_id
         )
 
         result.append({
-            "student_id": student.student_id,
-            "student_name": student.name,
-            "subject_id": performance.subject_id,
-            "subject_name": (
-                subject.name
-                if subject
-                else "Unknown"
-            ),
+            "student_id":
+                student.student_id,
+
+            "student_name":
+                student.name,
+
+            "subject_id":
+                performance.subject_id,
+
+            "subject_name":
+                (
+                    subject.name
+                    if subject
+                    else "Unknown"
+                ),
+
             "attendance_percentage":
                 performance.attendance_percentage,
+
             "marks_percentage":
                 performance.marks_percentage,
+
             "assignment_percentage":
                 performance.assignment_percentage,
+
             "overall_percentage":
                 performance.overall_percentage,
+
             "performance_level":
                 performance.performance_level
         })
 
     return {
-        "student_id": student.student_id,
-        "student_name": student.name,
-        "performance": result
+        "student_id":
+            student.student_id,
+
+        "student_name":
+            student.name,
+
+        "performance":
+            result
     }
 
 
@@ -419,32 +460,65 @@ def get_student_attendance(
             "message": "Attendance data is not available."
         }
 
+    # --------------------------------------------------------
+    # LOAD ALL SUBJECTS IN ONE QUERY
+    # --------------------------------------------------------
+
+    subject_ids = [
+        attendance.subject_id
+        for attendance in records
+    ]
+
+    subjects_by_id = _get_subjects_map(
+        db,
+        subject_ids
+    )
+
+    # --------------------------------------------------------
+    # BUILD RESULT
+    # --------------------------------------------------------
+
     result = []
 
     for attendance in records:
 
-        subject = _get_subject(
-            db,
+        subject = subjects_by_id.get(
             attendance.subject_id
         )
 
         result.append({
-            "student_id": student.student_id,
-            "student_name": student.name,
-            "subject_id": attendance.subject_id,
-            "subject_name": (
-                subject.name
-                if subject
-                else "Unknown"
-            ),
-            "date": str(attendance.date),
-            "status": attendance.status
+            "student_id":
+                student.student_id,
+
+            "student_name":
+                student.name,
+
+            "subject_id":
+                attendance.subject_id,
+
+            "subject_name":
+                (
+                    subject.name
+                    if subject
+                    else "Unknown"
+                ),
+
+            "date":
+                str(attendance.date),
+
+            "status":
+                attendance.status
         })
 
     return {
-        "student_id": student.student_id,
-        "student_name": student.name,
-        "attendance": result
+        "student_id":
+            student.student_id,
+
+        "student_name":
+            student.name,
+
+        "attendance":
+            result
     }
 
 
@@ -501,39 +575,77 @@ def get_student_marks(
             "message": "Marks data is not available."
         }
 
+    # --------------------------------------------------------
+    # LOAD ALL SUBJECTS IN ONE QUERY
+    # --------------------------------------------------------
+
+    subject_ids = [
+        marks.subject_id
+        for marks in records
+    ]
+
+    subjects_by_id = _get_subjects_map(
+        db,
+        subject_ids
+    )
+
+    # --------------------------------------------------------
+    # BUILD RESULT
+    # --------------------------------------------------------
+
     result = []
 
     for marks in records:
 
-        subject = _get_subject(
-            db,
+        subject = subjects_by_id.get(
             marks.subject_id
         )
 
         result.append({
-            "student_id": student.student_id,
-            "student_name": student.name,
-            "subject_id": marks.subject_id,
-            "subject_name": (
-                subject.name
-                if subject
-                else "Unknown"
-            ),
-            "exam_type": marks.exam_type,
-            "marks_obtained": marks.marks_obtained,
-            "max_marks": marks.max_marks,
-            "exam_date": (
-                str(marks.exam_date)
-                if marks.exam_date
-                else None
-            )
+            "student_id":
+                student.student_id,
+
+            "student_name":
+                student.name,
+
+            "subject_id":
+                marks.subject_id,
+
+            "subject_name":
+                (
+                    subject.name
+                    if subject
+                    else "Unknown"
+                ),
+
+            "exam_type":
+                marks.exam_type,
+
+            "marks_obtained":
+                marks.marks_obtained,
+
+            "max_marks":
+                marks.max_marks,
+
+            "exam_date":
+                (
+                    str(marks.exam_date)
+                    if marks.exam_date
+                    else None
+                )
         })
 
     return {
-        "student_id": student.student_id,
-        "student_name": student.name,
-        "marks": result
+        "student_id":
+            student.student_id,
+
+        "student_name":
+            student.name,
+
+        "marks":
+            result
     }
+
 
 
 # ============================================================
@@ -587,34 +699,70 @@ def get_student_risk(
             "message": "Risk data is not available."
         }
 
+    # --------------------------------------------------------
+    # LOAD ALL SUBJECTS IN ONE QUERY
+    # --------------------------------------------------------
+
+    subject_ids = [
+        risk.subject_id
+        for risk in records
+    ]
+
+    subjects_by_id = _get_subjects_map(
+        db,
+        subject_ids
+    )
+
+    # --------------------------------------------------------
+    # BUILD RESULT
+    # --------------------------------------------------------
+
     result = []
 
     for risk in records:
 
-        subject = _get_subject(
-            db,
+        subject = subjects_by_id.get(
             risk.subject_id
         )
 
         result.append({
-            "student_id": student.student_id,
-            "student_name": student.name,
-            "subject_id": risk.subject_id,
-            "subject_name": (
-                subject.name
-                if subject
-                else "Unknown"
-            ),
-            "risk_score": risk.risk_score,
-            "risk_level": risk.risk_level,
-            "risk_reason": risk.risk_reason
+            "student_id":
+                student.student_id,
+
+            "student_name":
+                student.name,
+
+            "subject_id":
+                risk.subject_id,
+
+            "subject_name":
+                (
+                    subject.name
+                    if subject
+                    else "Unknown"
+                ),
+
+            "risk_score":
+                risk.risk_score,
+
+            "risk_level":
+                risk.risk_level,
+
+            "risk_reason":
+                risk.risk_reason
         })
 
     return {
-        "student_id": student.student_id,
-        "student_name": student.name,
-        "risk": result
+        "student_id":
+            student.student_id,
+
+        "student_name":
+            student.name,
+
+        "risk":
+            result
     }
+
 
 
 # ============================================================
@@ -670,12 +818,29 @@ def get_student_recommendations(
             "message": "Recommendations are not available."
         }
 
+    # --------------------------------------------------------
+    # LOAD ALL SUBJECTS IN ONE QUERY
+    # --------------------------------------------------------
+
+    subject_ids = [
+        recommendation.subject_id
+        for recommendation in records
+    ]
+
+    subjects_by_id = _get_subjects_map(
+        db,
+        subject_ids
+    )
+
+    # --------------------------------------------------------
+    # BUILD RESULT
+    # --------------------------------------------------------
+
     result = []
 
     for recommendation in records:
 
-        subject = _get_subject(
-            db,
+        subject = subjects_by_id.get(
             recommendation.subject_id
         )
 
@@ -724,6 +889,7 @@ def get_student_recommendations(
     }
 
 
+
 # ============================================================
 # COLLEGE SUMMARY
 # ============================================================
@@ -759,16 +925,22 @@ def get_total_students(
             "total_students": 0
         }
 
-    student_ids = db.query(
+    
+    total = db.query(
         Performance.student_id
     ).filter(
         Performance.subject_id.in_(subject_ids)
-    ).distinct().all()
+    ).distinct().count()
 
     return {
-        "total_students": len(student_ids)
+        "total_students": total
     }
 
+
+    
+# ============================================================
+# LOW ATTENDANCE STUDENTS
+# ============================================================
 
 def get_low_attendance_students(
     db: Session,
@@ -787,22 +959,14 @@ def get_low_attendance_students(
         }
 
     # --------------------------------------------------------
-    # ADMIN
+    # ADMIN / FACULTY QUERY
     # --------------------------------------------------------
 
-    if current_user.role == "admin":
+    query = db.query(Performance).filter(
+        Performance.attendance_percentage < threshold
+    )
 
-        performances = db.query(
-            Performance
-        ).filter(
-            Performance.attendance_percentage < threshold
-        ).all()
-
-    # --------------------------------------------------------
-    # FACULTY
-    # --------------------------------------------------------
-
-    else:
+    if current_user.role == "faculty":
 
         subject_ids = get_faculty_subject_ids(
             db,
@@ -815,12 +979,11 @@ def get_low_attendance_students(
                     "No subjects assigned to this faculty."
             }
 
-        performances = db.query(
-            Performance
-        ).filter(
-            Performance.subject_id.in_(subject_ids),
-            Performance.attendance_percentage < threshold
-        ).all()
+        query = query.filter(
+            Performance.subject_id.in_(subject_ids)
+        )
+
+    performances = query.all()
 
     if not performances:
         return {
@@ -828,39 +991,70 @@ def get_low_attendance_students(
                 "No students found with low attendance."
         }
 
+    # --------------------------------------------------------
+    # BULK LOAD STUDENTS
+    # --------------------------------------------------------
+
+    student_ids = [
+        performance.student_id
+        for performance in performances
+    ]
+
+    students_by_id = _get_students_map(
+        db,
+        student_ids
+    )
+
+    # --------------------------------------------------------
+    # BULK LOAD SUBJECTS
+    # --------------------------------------------------------
+
+    subject_ids = [
+        performance.subject_id
+        for performance in performances
+    ]
+
+    subjects_by_id = _get_subjects_map(
+        db,
+        subject_ids
+    )
+
+    # --------------------------------------------------------
+    # BUILD RESULT
+    # --------------------------------------------------------
+
     result = []
 
     for performance in performances:
 
-        student = _get_student(
-            db,
+        student = students_by_id.get(
             performance.student_id
         )
 
-        subject = _get_subject(
-            db,
+        subject = subjects_by_id.get(
             performance.subject_id
         )
 
-        if student:
+        if not student:
+            continue
 
-            result.append({
-                "student_id":
-                    student.student_id,
+        result.append({
+            "student_id":
+                student.student_id,
 
-                "student_name":
-                    student.name,
+            "student_name":
+                student.name,
 
-                "subject_name":
-                    (
-                        subject.name
-                        if subject
-                        else "Unknown"
-                    ),
+            "subject_name":
+                (
+                    subject.name
+                    if subject
+                    else "Unknown"
+                ),
 
-                "attendance_percentage":
-                    performance.attendance_percentage
-            })
+            "attendance_percentage":
+                performance.attendance_percentage
+        })
 
     return {
         "threshold":
@@ -871,28 +1065,25 @@ def get_low_attendance_students(
     }
 
 
+
+# ============================================================
+# HIGH RISK STUDENTS
+# ============================================================
+
 def get_high_risk_students(
     db: Session,
     current_user
 ):
 
     # --------------------------------------------------------
-    # ADMIN
+    # ADMIN / FACULTY QUERY
     # --------------------------------------------------------
 
-    if current_user.role == "admin":
+    query = db.query(StudentRisk).filter(
+        StudentRisk.risk_level == "High"
+    )
 
-        risk_records = db.query(
-            StudentRisk
-        ).filter(
-            StudentRisk.risk_level == "High"
-        ).all()
-
-    # --------------------------------------------------------
-    # FACULTY
-    # --------------------------------------------------------
-
-    else:
+    if current_user.role == "faculty":
 
         subject_ids = get_faculty_subject_ids(
             db,
@@ -905,12 +1096,11 @@ def get_high_risk_students(
                     "No subjects assigned to this faculty."
             }
 
-        risk_records = db.query(
-            StudentRisk
-        ).filter(
-            StudentRisk.subject_id.in_(subject_ids),
-            StudentRisk.risk_level == "High"
-        ).all()
+        query = query.filter(
+            StudentRisk.subject_id.in_(subject_ids)
+        )
+
+    risk_records = query.all()
 
     if not risk_records:
         return {
@@ -918,50 +1108,82 @@ def get_high_risk_students(
                 "No high-risk students found."
         }
 
+    # --------------------------------------------------------
+    # BULK LOAD STUDENTS
+    # --------------------------------------------------------
+
+    student_ids = [
+        risk.student_id
+        for risk in risk_records
+    ]
+
+    students_by_id = _get_students_map(
+        db,
+        student_ids
+    )
+
+    # --------------------------------------------------------
+    # BULK LOAD SUBJECTS
+    # --------------------------------------------------------
+
+    subject_ids = [
+        risk.subject_id
+        for risk in risk_records
+    ]
+
+    subjects_by_id = _get_subjects_map(
+        db,
+        subject_ids
+    )
+
+    # --------------------------------------------------------
+    # BUILD RESULT
+    # --------------------------------------------------------
+
     result = []
 
     for risk in risk_records:
 
-        student = _get_student(
-            db,
+        student = students_by_id.get(
             risk.student_id
         )
 
-        subject = _get_subject(
-            db,
+        subject = subjects_by_id.get(
             risk.subject_id
         )
 
-        if student:
+        if not student:
+            continue
 
-            result.append({
-                "student_id":
-                    student.student_id,
+        result.append({
+            "student_id":
+                student.student_id,
 
-                "student_name":
-                    student.name,
+            "student_name":
+                student.name,
 
-                "subject_name":
-                    (
-                        subject.name
-                        if subject
-                        else "Unknown"
-                    ),
+            "subject_name":
+                (
+                    subject.name
+                    if subject
+                    else "Unknown"
+                ),
 
-                "risk_score":
-                    risk.risk_score,
+            "risk_score":
+                risk.risk_score,
 
-                "risk_level":
-                    risk.risk_level,
+            "risk_level":
+                risk.risk_level,
 
-                "risk_reason":
-                    risk.risk_reason
-            })
+            "risk_reason":
+                risk.risk_reason
+        })
 
     return {
         "students":
             result
     }
+
 
 
 def get_average_attendance(

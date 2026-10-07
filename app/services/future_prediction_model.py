@@ -15,13 +15,15 @@ from sklearn.metrics import (
 from sqlalchemy.orm import Session
 
 from app.services.ml_dataset_service import (
-    get_ml_training_data
+    get_ml_training_data,
+    FEATURE_NAMES,
+    TARGET_NAME
 )
 
 
-# ===================================================
+# ============================================================
 # MODEL CONFIGURATION
-# ===================================================
+# ============================================================
 
 MODEL_DIR = "app/ml_models"
 
@@ -30,83 +32,80 @@ MODEL_PATH = os.path.join(
     "student_future_performance_model.joblib"
 )
 
+MODEL_NAME = "Random Forest Regressor"
 
-# ===================================================
-# TRAIN AND SAVE FUTURE PERFORMANCE MODEL
-# ===================================================
+PREDICTION_TYPE = "Future Final Exam Performance"
 
-def train_and_save_future_model(db: Session):
+
+# ============================================================
+# TRAIN AND SAVE MODEL
+# ============================================================
+
+def train_and_save_future_model(
+    db: Session
+):
+
     """
-    Train Random Forest model for future final exam
-    performance prediction and save the trained model.
+    Train Random Forest model for future final
+    exam performance prediction.
     """
 
-    # -------------------------------------------------
+    # --------------------------------------------------------
     # GET TRAINING DATA
-    # -------------------------------------------------
+    # --------------------------------------------------------
 
-    X, y = get_ml_training_data(db)
-
-    X = np.array(
-        X,
-        dtype=float
+    X, y = get_ml_training_data(
+        db
     )
 
-    y = np.array(
-        y,
-        dtype=float
-    )
-
-    # -------------------------------------------------
+    # --------------------------------------------------------
     # MINIMUM DATA CHECK
-    # -------------------------------------------------
+    # --------------------------------------------------------
 
     if len(X) < 9:
+
         raise ValueError(
             "At least 9 ML training records are required "
             "for future performance model training."
         )
 
-    # -------------------------------------------------
+    # --------------------------------------------------------
     # TRAIN / TEST SPLIT
-    # -------------------------------------------------
+    # --------------------------------------------------------
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
-        test_size=0.3,
+        test_size=0.30,
         random_state=42
     )
 
-    # -------------------------------------------------
-    # CREATE RANDOM FOREST MODEL
-    # -------------------------------------------------
+    # --------------------------------------------------------
+    # EVALUATION MODEL
+    # --------------------------------------------------------
 
-    model = RandomForestRegressor(
-        n_estimators=100,
-        random_state=42
+    evaluation_model = RandomForestRegressor(
+        n_estimators=200,
+        random_state=42,
+        n_jobs=-1
     )
 
-    # -------------------------------------------------
-    # TRAIN MODEL
-    # -------------------------------------------------
-
-    model.fit(
+    evaluation_model.fit(
         X_train,
         y_train
     )
 
-    # -------------------------------------------------
+    # --------------------------------------------------------
     # TEST MODEL
-    # -------------------------------------------------
+    # --------------------------------------------------------
 
-    y_pred = model.predict(
+    y_pred = evaluation_model.predict(
         X_test
     )
 
-    # -------------------------------------------------
-    # EVALUATION
-    # -------------------------------------------------
+    # --------------------------------------------------------
+    # METRICS
+    # --------------------------------------------------------
 
     mae = mean_absolute_error(
         y_test,
@@ -120,10 +119,20 @@ def train_and_save_future_model(db: Session):
         )
     )
 
-    r2 = r2_score(
-        y_test,
-        y_pred
-    )
+    # --------------------------------------------------------
+    # R2 SCORE
+    # --------------------------------------------------------
+
+    if len(y_test) >= 2:
+
+        r2 = r2_score(
+            y_test,
+            y_pred
+        )
+
+    else:
+
+        r2 = 0.0
 
     metrics = {
         "mae": round(
@@ -142,13 +151,17 @@ def train_and_save_future_model(db: Session):
         )
     }
 
-    # -------------------------------------------------
-    # TRAIN FINAL MODEL USING ALL DATA
-    # -------------------------------------------------
+    # --------------------------------------------------------
+    # FINAL MODEL
+    #
+    # After evaluation, train final model using
+    # ALL available historical records.
+    # --------------------------------------------------------
 
     final_model = RandomForestRegressor(
-        n_estimators=100,
-        random_state=42
+        n_estimators=200,
+        random_state=42,
+        n_jobs=-1
     )
 
     final_model.fit(
@@ -156,56 +169,51 @@ def train_and_save_future_model(db: Session):
         y
     )
 
-    # -------------------------------------------------
+    # --------------------------------------------------------
     # CREATE MODEL DIRECTORY
-    # -------------------------------------------------
+    # --------------------------------------------------------
 
     os.makedirs(
         MODEL_DIR,
         exist_ok=True
     )
 
-    # -------------------------------------------------
+    # --------------------------------------------------------
     # MODEL ARTIFACT
-    # -------------------------------------------------
+    # --------------------------------------------------------
 
     model_artifact = {
 
-        "model": final_model,
+        "model":
+            final_model,
 
-        "model_name": (
-            "Random Forest Regressor"
-        ),
+        "model_name":
+            MODEL_NAME,
 
-        "prediction_type": (
-            "Future Final Exam Performance"
-        ),
+        "prediction_type":
+            PREDICTION_TYPE,
 
-        "features": [
-            "attendance_percentage",
-            "internal_marks_percentage",
-            "assignment_percentage",
-            "previous_exam_percentage"
-        ],
+        "features":
+            FEATURE_NAMES,
 
-        "target": (
-            "final_exam_percentage"
-        ),
+        "target":
+            TARGET_NAME,
 
-        "metrics": metrics,
+        "metrics":
+            metrics,
 
-        "training_samples": len(X),
+        "training_samples":
+            len(X),
 
-        "trained_at": (
+        "trained_at":
             datetime.now(
                 timezone.utc
             ).isoformat()
-        )
     }
 
-    # -------------------------------------------------
+    # --------------------------------------------------------
     # SAVE MODEL
-    # -------------------------------------------------
+    # --------------------------------------------------------
 
     joblib.dump(
         model_artifact,
@@ -215,33 +223,339 @@ def train_and_save_future_model(db: Session):
     return model_artifact
 
 
-# ===================================================
-# LOAD SAVED MODEL
-# ===================================================
+# ============================================================
+# AUTOMATIC MODEL RETRAINING CHECK
+# ============================================================
+
+def retrain_future_model_if_needed(
+    db: Session,
+    minimum_new_records: int = 1,
+    force: bool = False
+):
+
+    """
+    Automatically retrain the future performance model.
+
+    Retraining happens when:
+
+    1. No model exists.
+    2. Existing model is invalid.
+    3. Enough new ML records are available.
+    4. force=True is passed.
+
+    force=True is important when an existing ML record
+    is updated but the total number of rows does not increase.
+    """
+
+    # --------------------------------------------------------
+    # GET CURRENT TRAINING DATA
+    # --------------------------------------------------------
+
+    X, y = get_ml_training_data(
+        db
+    )
+
+    current_samples = len(X)
+
+    # --------------------------------------------------------
+    # MINIMUM TOTAL DATA CHECK
+    # --------------------------------------------------------
+
+    if current_samples < 9:
+
+        return {
+            "retrained":
+                False,
+
+            "reason":
+                (
+                    "Not enough historical ML records "
+                    "available for training. "
+                    "At least 9 valid records are required."
+                ),
+
+            "training_samples":
+                current_samples,
+
+            "new_records":
+                0
+        }
+
+    # --------------------------------------------------------
+    # CHECK EXISTING MODEL
+    # --------------------------------------------------------
+
+    model_exists = os.path.exists(
+        MODEL_PATH
+    )
+
+    # --------------------------------------------------------
+    # NO MODEL EXISTS
+    # --------------------------------------------------------
+
+    if not model_exists:
+
+        model_artifact = (
+            train_and_save_future_model(
+                db
+            )
+        )
+
+        return {
+            "retrained":
+                True,
+
+            "reason":
+                "No existing model found. Model trained.",
+
+            "training_samples":
+                model_artifact[
+                    "training_samples"
+                ],
+
+            "new_records":
+                current_samples,
+
+            "model":
+                model_artifact
+        }
+
+    # --------------------------------------------------------
+    # LOAD EXISTING MODEL
+    # --------------------------------------------------------
+
+    try:
+
+        existing_model = (
+            load_future_prediction_model()
+        )
+
+    except (
+        FileNotFoundError,
+        ValueError,
+        KeyError
+    ):
+
+        model_artifact = (
+            train_and_save_future_model(
+                db
+            )
+        )
+
+        return {
+            "retrained":
+                True,
+
+            "reason":
+                (
+                    "Existing model was invalid. "
+                    "Model retrained."
+                ),
+
+            "training_samples":
+                model_artifact[
+                    "training_samples"
+                ],
+
+            "new_records":
+                current_samples,
+
+            "model":
+                model_artifact
+        }
+
+    # --------------------------------------------------------
+    # PREVIOUS TRAINING SAMPLE COUNT
+    # --------------------------------------------------------
+
+    previous_training_samples = int(
+        existing_model.get(
+            "training_samples",
+            0
+        )
+    )
+
+    # --------------------------------------------------------
+    # CALCULATE NEW RECORDS
+    # --------------------------------------------------------
+
+    new_records = max(
+        current_samples
+        - previous_training_samples,
+        0
+    )
+
+    # ========================================================
+    # FORCE RETRAINING
+    # ========================================================
+
+    if force:
+
+        model_artifact = (
+            train_and_save_future_model(
+                db
+            )
+        )
+
+        return {
+            "retrained":
+                True,
+
+            "reason":
+                (
+                    "Model force-retrained after "
+                    "historical ML record update."
+                ),
+
+            "training_samples":
+                model_artifact[
+                    "training_samples"
+                ],
+
+            "previous_training_samples":
+                previous_training_samples,
+
+            "new_records":
+                new_records,
+
+            "model":
+                model_artifact
+        }
+
+    # ========================================================
+    # NORMAL NEW RECORD CHECK
+    # ========================================================
+
+    if new_records < minimum_new_records:
+
+        return {
+            "retrained":
+                False,
+
+            "reason":
+                "Retraining threshold not reached.",
+
+            "training_samples":
+                current_samples,
+
+            "previous_training_samples":
+                previous_training_samples,
+
+            "new_records":
+                new_records
+        }
+
+    # ========================================================
+    # RETRAIN MODEL
+    # ========================================================
+
+    model_artifact = (
+        train_and_save_future_model(
+            db
+        )
+    )
+
+    return {
+        "retrained":
+            True,
+
+        "reason":
+            (
+                "New historical data detected. "
+                "Model retrained."
+            ),
+
+        "training_samples":
+            model_artifact[
+                "training_samples"
+            ],
+
+        "previous_training_samples":
+            previous_training_samples,
+
+        "new_records":
+            new_records,
+
+        "model":
+            model_artifact
+    }
+
+
+# ============================================================
+# LOAD MODEL
+# ============================================================
 
 def load_future_prediction_model():
-    """
-    Load the previously trained future prediction model.
-    """
+
+    # --------------------------------------------------------
+    # MODEL FILE CHECK
+    # --------------------------------------------------------
 
     if not os.path.exists(
         MODEL_PATH
     ):
+
         raise FileNotFoundError(
             "Future performance model not found. "
             "Please train the model first."
         )
 
+    # --------------------------------------------------------
+    # LOAD ARTIFACT
+    # --------------------------------------------------------
+
     model_artifact = joblib.load(
         MODEL_PATH
     )
 
+    # --------------------------------------------------------
+    # VALIDATE ARTIFACT TYPE
+    # --------------------------------------------------------
+
+    if not isinstance(
+        model_artifact,
+        dict
+    ):
+
+        raise ValueError(
+            "Invalid future performance model artifact."
+        )
+
+    # --------------------------------------------------------
+    # VALIDATE FEATURES
+    # --------------------------------------------------------
+
+    saved_features = (
+        model_artifact.get(
+            "features",
+            []
+        )
+    )
+
+    if saved_features != FEATURE_NAMES:
+
+        raise ValueError(
+            "Saved prediction model uses an incompatible "
+            "feature set. Please retrain the future "
+            "performance model."
+        )
+
+    # --------------------------------------------------------
+    # VALIDATE MODEL OBJECT
+    # --------------------------------------------------------
+
+    if "model" not in model_artifact:
+
+        raise ValueError(
+            "Saved prediction model is incomplete."
+        )
+
     return model_artifact
 
 
-# ===================================================
+# ============================================================
 # PREDICT FUTURE PERFORMANCE
-# ===================================================
+# ============================================================
 
 def predict_future_performance(
     attendance_percentage,
@@ -249,25 +563,33 @@ def predict_future_performance(
     assignment_percentage,
     previous_exam_percentage
 ):
+
     """
     Predict future final exam percentage.
+
+    IMPORTANT:
+        Final exam marks are NOT used as an input.
     """
 
-    # -------------------------------------------------
-    # LOAD MODEL
-    # -------------------------------------------------
+    # --------------------------------------------------------
+    # LOAD TRAINED MODEL
+    # --------------------------------------------------------
 
     model_artifact = (
         load_future_prediction_model()
     )
 
-    model = model_artifact[
-        "model"
-    ]
+    model = (
+        model_artifact[
+            "model"
+        ]
+    )
 
-    # -------------------------------------------------
-    # PREPARE INPUT DATA
-    # -------------------------------------------------
+    # --------------------------------------------------------
+    # INPUT FEATURES
+    #
+    # Order MUST MATCH FEATURE_NAMES
+    # --------------------------------------------------------
 
     input_data = np.array(
         [[
@@ -279,26 +601,55 @@ def predict_future_performance(
         dtype=float
     )
 
-    # -------------------------------------------------
-    # MAKE PREDICTION
-    # -------------------------------------------------
+    # --------------------------------------------------------
+    # VALIDATE INPUT
+    # --------------------------------------------------------
 
-    prediction = model.predict(
+    if not np.isfinite(
         input_data
-    )[0]
+    ).all():
 
-    # -------------------------------------------------
-    # KEEP VALUE BETWEEN 0 AND 100
-    # -------------------------------------------------
+        raise ValueError(
+            "Prediction input contains invalid values."
+        )
 
-    prediction = round(
-        max(
-            0,
-            min(
-                100,
-                float(prediction)
-            )
+    # --------------------------------------------------------
+    # VALIDATE RANGE
+    # --------------------------------------------------------
+
+    if (
+        input_data < 0
+    ).any() or (
+        input_data > 100
+    ).any():
+
+        raise ValueError(
+            "Prediction input values must be "
+            "between 0 and 100."
+        )
+
+    # --------------------------------------------------------
+    # PREDICT
+    # --------------------------------------------------------
+
+    prediction = (
+        model.predict(
+            input_data
+        )[0]
+    )
+
+    # --------------------------------------------------------
+    # KEEP PREDICTION BETWEEN 0 AND 100
+    # --------------------------------------------------------
+
+    prediction = max(
+        0.0,
+        min(
+            100.0,
+            float(prediction)
         )
     )
 
-    return prediction
+    return round(
+        prediction
+    )

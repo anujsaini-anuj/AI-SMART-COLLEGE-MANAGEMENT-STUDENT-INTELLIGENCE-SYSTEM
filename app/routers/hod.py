@@ -16,7 +16,6 @@ from app.database.models import (
     Marks,
     Assignment,
     StudentRisk,
-    User,
     Recommendation
 )
 
