@@ -241,33 +241,63 @@ def calculate_and_update_performance(
         * ASSIGNMENT_WEIGHT
     )
 
+
     # ========================================================
-    # PASS / FAIL
+    # ATTENDANCE ELIGIBILITY
     # ========================================================
 
-    if (
+    attendance_eligible = (
         attendance_percentage
         >= MIN_ATTENDANCE_PERCENTAGE
-        and
+    )
+
+
+    # ========================================================
+    # ACADEMIC PASS
+    # ========================================================
+
+    academic_pass = (
         academic_percentage
         >= MIN_ACADEMIC_PERCENTAGE
-    ):
+    )
 
-        pass_status = "PASS"
+
+    # ========================================================
+    # FINAL STATUS
+    # ========================================================
+    #
+    # 1. Attendance < 75%
+    #       → NOT ELIGIBLE
+    #
+    # 2. Attendance >= 75%
+    #       → Academic percentage check
+    #
+    # 3. Academic < 40%
+    #       → FAIL
+    #
+    # 4. Academic >= 40%
+    #       → PASS
+    #
+    # ========================================================
+
+    if not attendance_eligible:
+
+        pass_status = "NOT ELIGIBLE"
+
+    elif not academic_pass:
+
+        pass_status = "FAIL"
 
     else:
 
-        pass_status = "FAIL"
+        pass_status = "PASS"
+
 
     # ========================================================
     # PERFORMANCE LEVEL
     # ========================================================
 
-    if pass_status == "FAIL":
-
-        performance_level = "Poor"
-
-    elif academic_percentage >= 80:
+    if academic_percentage >= 80:
 
         performance_level = "Excellent"
 
@@ -275,9 +305,13 @@ def calculate_and_update_performance(
 
         performance_level = "Good"
 
-    else:
+    elif academic_percentage >= 40:
 
         performance_level = "Average"
+
+    else:
+
+        performance_level = "Poor"
 
     # ========================================================
     # EXISTING PERFORMANCE

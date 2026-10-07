@@ -49,10 +49,23 @@ def calculate_risk(
 ):
     """
     Calculate student risk score, risk level,
-    reason and recommended action.
+    risk reason and recommended action.
+
+    Important:
+    - Attendance risk is calculated separately.
+    - Academic risk is calculated separately.
+    - Assignment risk is calculated separately.
+    - FAIL is NOT given an additional +10 score because
+      academic failure is already represented by
+      academic_percentage < 40.
+    - NOT ELIGIBLE is handled as an eligibility warning,
+      not as an additional risk-score penalty.
     """
 
-    # Keep percentages between 0 and 100
+    # ========================================================
+    # KEEP VALUES BETWEEN 0 AND 100
+    # ========================================================
+
     attendance_percentage = max(
         0.0,
         min(100.0, float(attendance_percentage))
@@ -80,7 +93,8 @@ def calculate_risk(
         risk_score += 40
 
         risk_reasons.append(
-            f"Very low attendance ({attendance_percentage:.2f}%)"
+            f"Very low attendance "
+            f"({attendance_percentage:.2f}%)"
         )
 
     elif attendance_percentage < ATTENDANCE_LOW:
@@ -88,7 +102,8 @@ def calculate_risk(
         risk_score += 30
 
         risk_reasons.append(
-            f"Low attendance ({attendance_percentage:.2f}%)"
+            f"Low attendance "
+            f"({attendance_percentage:.2f}%)"
         )
 
     elif attendance_percentage < ATTENDANCE_REQUIRED:
@@ -154,25 +169,13 @@ def calculate_risk(
         )
 
     # ========================================================
-    # 4. FAIL STATUS
-    # ========================================================
-
-    if str(pass_status).upper() == "FAIL":
-
-        risk_score += 10
-
-        risk_reasons.append(
-            "Student is currently in FAIL status"
-        )
-
-    # ========================================================
-    # LIMIT SCORE
+    # 4. LIMIT SCORE
     # ========================================================
 
     risk_score = min(risk_score, 100)
 
     # ========================================================
-    # RISK LEVEL
+    # 5. RISK LEVEL
     # ========================================================
 
     if risk_score >= HIGH_RISK_THRESHOLD:
@@ -188,7 +191,7 @@ def calculate_risk(
         risk_level = "Low"
 
     # ========================================================
-    # NO RISK REASON
+    # 6. NO RISK REASON
     # ========================================================
 
     if not risk_reasons:
@@ -200,30 +203,13 @@ def calculate_risk(
     risk_reason = "; ".join(risk_reasons)
 
     # ========================================================
-    # RECOMMENDED ACTION
+    # 7. RECOMMENDED ACTION
     # ========================================================
 
-    if risk_level == "High":
-
-        recommended_action = (
-            "Immediate faculty intervention recommended. "
-            "Student should receive academic support, "
-            "attendance counselling and regular progress monitoring."
-        )
-
-    elif risk_level == "Medium":
-
-        recommended_action = (
-            "Student should be monitored regularly. "
-            "Faculty should focus on attendance and academic "
-            "improvement and provide appropriate academic support."
-        )
-
-    else:
-
-        recommended_action = (
-            "Continue regular academic and attendance monitoring."
-        )
+    recommended_action = get_recommended_action(
+        risk_level=risk_level,
+        pass_status=pass_status
+    )
 
     return (
         risk_score,
@@ -233,6 +219,9 @@ def calculate_risk(
     )
 
 
+# ============================================================
+# CREATE / UPDATE STUDENT RISK
+# ============================================================
 
 def create_or_update_student_risk(
     db: Session,
@@ -293,10 +282,93 @@ def create_or_update_student_risk(
 
 
 # ============================================================
+# RECOMMENDED ACTION
+# ============================================================
+
+def get_recommended_action(
+    risk_level: str,
+    pass_status: str | None = None
+):
+    """
+    Recommended action risk level + eligibility status
+    ke basis par return karta hai.
+    """
+
+    normalized_status = (
+        str(pass_status).upper()
+        if pass_status
+        else ""
+    )
+
+    # ========================================================
+    # NOT ELIGIBLE
+    # ========================================================
+
+    if normalized_status == "NOT ELIGIBLE":
+
+        if risk_level == "High":
+
+            return (
+                "Immediate faculty intervention required. "
+                "Student is below the minimum attendance requirement. "
+                "Attendance counselling, academic support and "
+                "close progress monitoring are recommended."
+            )
+
+        if risk_level == "Medium":
+
+            return (
+                "Student is below the minimum attendance requirement. "
+                "Faculty should provide attendance counselling and "
+                "regular academic monitoring."
+            )
+
+        return (
+            "Student is below the required 75% attendance. "
+            "Attendance improvement and regular monitoring are recommended."
+        )
+
+    # ========================================================
+    # HIGH RISK
+    # ========================================================
+
+    if risk_level == "High":
+
+        return (
+            "Immediate faculty intervention, counselling "
+            "and close academic monitoring recommended."
+        )
+
+    # ========================================================
+    # MEDIUM RISK
+    # ========================================================
+
+    if risk_level == "Medium":
+
+        return (
+            "Regular monitoring and academic support recommended."
+        )
+
+    # ========================================================
+    # LOW RISK
+    # ========================================================
+
+    return (
+        "Continue regular academic and attendance monitoring."
+    )
+
+
+# ============================================================
 # RISK SUMMARY
 # ============================================================
 
-def get_risk_summary(risk_records):
+def get_risk_summary(risk_records, performance_records=None):
+    """
+    Student ke subject-wise risk records ka summary.
+
+    NOT ELIGIBLE subjects ko bhi early-warning condition
+    ke roop mein consider karta hai.
+    """
 
     if not risk_records:
 
@@ -305,7 +377,9 @@ def get_risk_summary(risk_records):
             "highest_risk_score": 0,
             "high_risk_subjects": 0,
             "medium_risk_subjects": 0,
-            "low_risk_subjects": 0
+            "low_risk_subjects": 0,
+            "not_eligible_subjects": 0,
+            "early_warning_subjects": 0
         }
 
     high_count = sum(
@@ -326,16 +400,34 @@ def get_risk_summary(risk_records):
         if risk.risk_level == "Low"
     )
 
+    not_eligible_count = 0
+
+    if performance_records:
+
+        not_eligible_count = sum(
+            1
+            for performance in performance_records
+            if str(performance.pass_status).upper()
+            == "NOT ELIGIBLE"
+        )
+
     highest_score = max(
         risk.risk_score
         for risk in risk_records
     )
 
+    # ========================================================
+    # OVERALL RISK
+    # ========================================================
+
     if highest_score >= HIGH_RISK_THRESHOLD:
 
         overall_risk = "High"
 
-    elif highest_score >= LOW_RISK_THRESHOLD:
+    elif (
+        highest_score >= LOW_RISK_THRESHOLD
+        or not_eligible_count > 0
+    ):
 
         overall_risk = "Medium"
 
@@ -343,37 +435,21 @@ def get_risk_summary(risk_records):
 
         overall_risk = "Low"
 
+    early_warning_subjects = (
+        high_count
+        + medium_count
+        + not_eligible_count
+    )
+
     return {
         "overall_risk_level": overall_risk,
         "highest_risk_score": highest_score,
         "high_risk_subjects": high_count,
         "medium_risk_subjects": medium_count,
-        "low_risk_subjects": low_count
+        "low_risk_subjects": low_count,
+        "not_eligible_subjects": not_eligible_count,
+        "early_warning_subjects": early_warning_subjects
     }
-
-
-# ============================================================
-# RECOMMENDED ACTION
-# ============================================================
-
-def get_recommended_action(risk_level: str):
-
-    if risk_level == "High":
-
-        return (
-            "Immediate faculty intervention, counselling "
-            "and close academic monitoring recommended."
-        )
-
-    if risk_level == "Medium":
-
-        return (
-            "Regular monitoring and academic support recommended."
-        )
-
-    return (
-        "Continue regular monitoring."
-    )
 
 
 # ============================================================
@@ -409,7 +485,10 @@ def calculate_student_risk(
 
         raise HTTPException(
             status_code=400,
-            detail="Risk calculation is not allowed for an inactive student."
+            detail=(
+                "Risk calculation is not allowed "
+                "for an inactive student."
+            )
         )
 
     # --------------------------------------------------------
@@ -437,7 +516,10 @@ def calculate_student_risk(
 
         raise HTTPException(
             status_code=400,
-            detail="This subject does not belong to the student's course."
+            detail=(
+                "This subject does not belong "
+                "to the student's course."
+            )
         )
 
     # --------------------------------------------------------
@@ -643,7 +725,10 @@ def get_all_student_risks(
         if risk.risk_level == "Low"
     )
 
-    # Unique students
+    # --------------------------------------------------------
+    # UNIQUE STUDENTS
+    # --------------------------------------------------------
+
     unique_student_ids = {
         risk.student.student_id
         for risk in risks
@@ -705,15 +790,35 @@ def get_early_warnings(
         .subquery()
     )
 
-    warnings = (
-        db.query(StudentRisk)
+    # ========================================================
+    # JOIN STUDENT RISK + PERFORMANCE
+    # ========================================================
+
+    warning_records = (
+        db.query(StudentRisk, Performance)
+        .join(
+            Performance,
+            (
+                (Performance.student_id == StudentRisk.student_id)
+                &
+                (Performance.subject_id == StudentRisk.subject_id)
+            )
+        )
         .options(
             joinedload(StudentRisk.student),
             joinedload(StudentRisk.subject)
         )
         .filter(
-            StudentRisk.subject_id.in_(assigned_subject_ids),
-            StudentRisk.risk_level.in_(["High", "Medium"])
+            StudentRisk.subject_id.in_(assigned_subject_ids)
+        )
+        .filter(
+            (
+                StudentRisk.risk_level.in_(["High", "Medium"])
+            )
+            |
+            (
+                Performance.pass_status == "NOT ELIGIBLE"
+            )
         )
         .order_by(
             StudentRisk.risk_score.desc()
@@ -721,49 +826,81 @@ def get_early_warnings(
         .all()
     )
 
+    # ========================================================
+    # COUNTS
+    # ========================================================
+
     high_count = sum(
         1
-        for warning in warnings
-        if warning.risk_level == "High"
+        for risk, performance in warning_records
+        if risk.risk_level == "High"
     )
 
     medium_count = sum(
         1
-        for warning in warnings
-        if warning.risk_level == "Medium"
+        for risk, performance in warning_records
+        if risk.risk_level == "Medium"
     )
+
+    not_eligible_count = sum(
+        1
+        for risk, performance in warning_records
+        if str(performance.pass_status).upper()
+        == "NOT ELIGIBLE"
+    )
+
+    # ========================================================
+    # RESPONSE
+    # ========================================================
 
     return {
 
-        "message": "Early warning records retrieved successfully",
+        "message": (
+            "Early warning records retrieved successfully"
+        ),
 
-        "total_warnings": len(warnings),
+        "total_warnings": len(warning_records),
 
         "summary": {
             "high_risk": high_count,
-            "medium_risk": medium_count
+            "medium_risk": medium_count,
+            "not_eligible": not_eligible_count
         },
 
         "warnings": [
+
             {
-                "student_id": warning.student.student_id,
-                "student_name": warning.student.name,
+                "student_id": risk.student.student_id,
+                "student_name": risk.student.name,
 
-                "subject_id": warning.subject.id,
-                "subject_name": warning.subject.name,
-                "subject_code": warning.subject.code,
+                "subject_id": risk.subject.id,
+                "subject_name": risk.subject.name,
+                "subject_code": risk.subject.code,
 
-                "risk_score": warning.risk_score,
-                "risk_level": warning.risk_level,
-                "risk_reason": warning.risk_reason,
+                "risk_score": risk.risk_score,
+                "risk_level": risk.risk_level,
+                "risk_reason": risk.risk_reason,
 
-                "recommended_action": get_recommended_action(
-                    warning.risk_level
+                "pass_status": performance.pass_status,
+
+                "early_warning_reason": (
+                    "Student is below the required "
+                    "75% attendance."
+                    if str(
+                        performance.pass_status
+                    ).upper() == "NOT ELIGIBLE"
+                    else risk.risk_reason
                 ),
 
-                "created_at": warning.created_at
+                "recommended_action": get_recommended_action(
+                    risk_level=risk.risk_level,
+                    pass_status=performance.pass_status
+                ),
+
+                "created_at": risk.created_at
             }
-            for warning in warnings
+
+            for risk, performance in warning_records
         ]
     }
 
@@ -817,7 +954,23 @@ def get_student_risk(
         .all()
     )
 
-    summary = get_risk_summary(risks)
+    # --------------------------------------------------------
+    # PERFORMANCE RECORDS
+    # --------------------------------------------------------
+
+    performances = (
+        db.query(Performance)
+        .filter(
+            Performance.student_id == student_id,
+            Performance.subject_id.in_(assigned_subject_ids)
+        )
+        .all()
+    )
+
+    summary = get_risk_summary(
+        risks,
+        performances
+    )
 
     return {
 
@@ -831,6 +984,7 @@ def get_student_risk(
         "risk_summary": summary,
 
         "risks": [
+
             {
                 "subject_id": risk.subject.id,
                 "subject_name": risk.subject.name,
@@ -846,6 +1000,7 @@ def get_student_risk(
 
                 "created_at": risk.created_at
             }
+
             for risk in risks
         ]
     }
@@ -888,7 +1043,18 @@ def get_my_risk(
         .all()
     )
 
-    summary = get_risk_summary(risks)
+    performances = (
+        db.query(Performance)
+        .filter(
+            Performance.student_id == student.student_id
+        )
+        .all()
+    )
+
+    summary = get_risk_summary(
+        risks,
+        performances
+    )
 
     return {
 
@@ -902,6 +1068,7 @@ def get_my_risk(
         "risk_summary": summary,
 
         "risks": [
+
             {
                 "subject_id": risk.subject.id,
                 "subject_name": risk.subject.name,
@@ -917,6 +1084,7 @@ def get_my_risk(
 
                 "created_at": risk.created_at
             }
+
             for risk in risks
         ]
     }
