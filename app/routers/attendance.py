@@ -90,6 +90,13 @@ def mark_attendance(
     if attendance_date is None:
         attendance_date = date.today()
 
+    # Prevent future attendance
+    if attendance_date > date.today():
+        raise HTTPException(
+            status_code=400,
+            detail="Attendance date cannot be in the future."
+        )
+
     # Check duplicate attendance
     existing_attendance = db.query(Attendance).filter(
         Attendance.student_id == student_id,
