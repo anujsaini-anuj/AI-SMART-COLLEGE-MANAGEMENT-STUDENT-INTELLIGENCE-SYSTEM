@@ -20,8 +20,7 @@ from app.database.models import (
 from app.services.prediction_service import (
     train_future_prediction_model,
     predict_future_student_performance,
-    create_historical_ml_record,
-    get_actual_final_exam_percentage
+    create_historical_ml_record
 )
 
 from app.utils.auth import (
@@ -537,15 +536,17 @@ def get_predictions(
 # MY FUTURE PREDICTIONS
 # STUDENT ONLY
 #
-# AUTOMATIC PREDICTION
+# IMPORTANT:
+# Student can ONLY VIEW already saved predictions.
 #
-# Student dashboard open/request karega:
-# 1. Student ke course ke subjects niklenge
-# 2. Final Exam hai to prediction nahi banegi
-# 3. Final Exam nahi hai to latest features calculate honge
-# 4. Trained model se prediction hogi
-# 5. Prediction database mein create/update hogi
-# 6. Student ko latest result milega
+# Student cannot:
+# - Generate prediction
+# - Update prediction
+# - Save prediction
+# - Run ML model
+#
+# Faculty generates the prediction using:
+# POST /prediction/future-performance
 # ============================================================
 
 @router.get("/my-prediction")
@@ -576,22 +577,32 @@ def get_my_predictions(
         )
 
     # ========================================================
-    # 2. STUDENT COURSE KE SUBJECTS
+    # 2. GET ONLY SAVED PREDICTIONS
+    #
+    # IMPORTANT:
+    # No ML model is called here.
+    # No prediction is calculated here.
+    # No Prediction record is created/updated here.
     # ========================================================
 
-    subjects = (
-        db.query(Subject)
+    predictions = (
+        db.query(Prediction)
         .filter(
-            Subject.course_id == student.course_id
+            Prediction.student_id == student.student_id,
+            Prediction.prediction_type ==
+                "Future Final Exam Performance"
         )
         .order_by(
-            Subject.semester.asc(),
-            Subject.id.asc()
+            Prediction.created_at.desc()
         )
         .all()
     )
 
-    if not subjects:
+    # ========================================================
+    # 3. NO SAVED PREDICTION
+    # ========================================================
+
+    if not predictions:
 
         return {
 
@@ -604,381 +615,61 @@ def get_my_predictions(
                     student.name
             },
 
-            "total_subjects":
-                0,
+            "total_predictions": 0,
 
-            "total_predictions":
-                0,
-
-            "predictions":
-                [],
+            "predictions": [],
 
             "message":
-                "No subjects found for the student's course."
+                "No future performance prediction is available yet. "
+                "Please contact your faculty."
         }
 
     # ========================================================
-    # 3. PROCESS EACH SUBJECT
+    # 4. PREPARE VIEW-ONLY RESPONSE
     # ========================================================
 
     result = []
 
-    prediction_count = 0
-
-    for subject in subjects:
-
-        # ----------------------------------------------------
-        # CHECK FINAL EXAM
-        #
-        # Service itself performs this check.
-        # If Final Exam exists, future prediction is not needed.
-        # ----------------------------------------------------
-
-        try:
-
-            (
-                prediction,
-                features,
-                model_info
-            ) = predict_future_student_performance(
-
-                db=db,
-
-                student_id=
-                    student.student_id,
-
-                subject_id=
-                    subject.id
-            )
-
-        except ValueError as e:
-
-            message = str(e)
-
-            # ------------------------------------------------
-            # FINAL EXAM ALREADY AVAILABLE
-            #
-            # Future prediction should not be shown.
-            # Actual result can be shown instead.
-            # ------------------------------------------------
-
-            if (
-                "Final Exam result is already available"
-                in message
-            ):
-
-                actual_percentage = (
-                    get_actual_final_exam_percentage(
-
-                        db=db,
-
-                        student_id=
-                            student.student_id,
-
-                        subject_id=
-                            subject.id
-                    )
-                )
-
-                if actual_percentage is not None:
-
-                    if actual_percentage >= 80:
-
-                        actual_level = "Excellent"
-
-                    elif actual_percentage >= 60:
-
-                        actual_level = "Good"
-
-                    elif actual_percentage >= 40:
-
-                        actual_level = "Average"
-
-                    else:
-
-                        actual_level = "Poor"
-
-                    result.append({
-
-                        "subject": {
-
-                            "subject_id":
-                                subject.id,
-
-                            "subject_name":
-                                subject.name,
-
-                            "subject_code":
-                                subject.code
-                        },
-
-                        "status":
-                            "actual_result_available",
-
-                        "prediction":
-                            None,
-
-                        "actual_result": {
-
-                            "final_exam_percentage":
-                                actual_percentage,
-
-                            "performance_level":
-                                actual_level
-                        },
-
-                        "message":
-                            "Final Exam result is already available. "
-                            "Future prediction is not required."
-                    })
-
-                continue
-
-            # ------------------------------------------------
-            # INSUFFICIENT DATA
-            #
-            # Student should still see subject status.
-            # Do NOT fail the complete endpoint.
-            # ------------------------------------------------
-
-            result.append({
-
-                "subject": {
-
-                    "subject_id":
-                        subject.id,
-
-                    "subject_name":
-                        subject.name,
-
-                    "subject_code":
-                        subject.code
-                },
-
-                "status":
-                    "prediction_unavailable",
-
-                "prediction":
-                    None,
-
-                "message":
-                    message
-            })
-
-            continue
-
-        # ====================================================
-        # 4. PREDICTION LEVEL
-        # ====================================================
-
-        if prediction >= 80:
-
-            predicted_level = "Excellent"
-
-        elif prediction >= 60:
-
-            predicted_level = "Good"
-
-        elif prediction >= 40:
-
-            predicted_level = "Average"
-
-        else:
-
-            predicted_level = "Poor"
-
-        # ====================================================
-        # 5. CREATE / UPDATE SAVED PREDICTION
-        # ====================================================
-
-        existing_prediction = (
-            db.query(Prediction)
-            .filter(
-
-                Prediction.student_id ==
-                    student.student_id,
-
-                Prediction.subject_id ==
-                    subject.id,
-
-                Prediction.prediction_type ==
-                    "Future Final Exam Performance"
-            )
-            .first()
-        )
-
-        if existing_prediction:
-
-            existing_prediction.predicted_performance = (
-                prediction
-            )
-
-            existing_prediction.predicted_level = (
-                predicted_level
-            )
-
-            existing_prediction.model_name = (
-                model_info["model_name"]
-            )
-
-            prediction_record = (
-                existing_prediction
-            )
-
-        else:
-
-            prediction_record = Prediction(
-
-                student_id =
-                    student.student_id,
-
-                subject_id =
-                    subject.id,
-
-                predicted_performance =
-                    prediction,
-
-                predicted_level =
-                    predicted_level,
-
-                model_name =
-                    model_info["model_name"],
-
-                prediction_type =
-                    "Future Final Exam Performance"
-            )
-
-            db.add(
-                prediction_record
-            )
-
-        # ====================================================
-        # 6. SAVE
-        # ====================================================
-
-        try:
-
-            db.commit()
-
-            db.refresh(
-                prediction_record
-            )
-
-        except Exception:
-
-            db.rollback()
-
-            # One subject ki saving fail ho to
-            # baaki subjects continue kar sakein.
-
-            result.append({
-
-                "subject": {
-
-                    "subject_id":
-                        subject.id,
-
-                    "subject_name":
-                        subject.name,
-
-                    "subject_code":
-                        subject.code
-                },
-
-                "status":
-                    "prediction_save_failed",
-
-                "prediction":
-                    None,
-
-                "message":
-                    "Prediction was calculated but could not be saved."
-            })
-
-            continue
-
-        # ====================================================
-        # 7. ADD RESULT
-        # ====================================================
+    for prediction in predictions:
 
         result.append({
 
             "prediction_id":
-                prediction_record.id,
+                prediction.id,
 
             "subject": {
 
                 "subject_id":
-                    subject.id,
+                    prediction.subject.id,
 
                 "subject_name":
-                    subject.name,
+                    prediction.subject.name,
 
                 "subject_code":
-                    subject.code
+                    prediction.subject.code
             },
 
-            "status":
-                "predicted",
-
-            "input_data": {
-
-                "attendance_percentage":
-                    features[
-                        "attendance_percentage"
-                    ],
-
-                "internal_marks_percentage":
-                    features[
-                        "internal_marks_percentage"
-                    ],
-
-                "assignment_percentage":
-                    features[
-                        "assignment_percentage"
-                    ],
-
-                "previous_exam_percentage":
-                    features[
-                        "previous_exam_percentage"
-                    ]
-            },
+            "prediction_type":
+                prediction.prediction_type,
 
             "prediction": {
 
                 "predicted_final_exam_percentage":
-                    prediction,
+                    prediction.predicted_performance,
 
                 "predicted_level":
-                    predicted_level
+                    prediction.predicted_level
             },
 
-            "model": {
-
-                "model_name":
-                    model_info[
-                        "model_name"
-                    ],
-
-                "training_samples":
-                    model_info[
-                        "training_samples"
-                    ],
-
-                "evaluation":
-                    model_info[
-                        "metrics"
-                    ]
-            },
+            "model_name":
+                prediction.model_name,
 
             "created_at":
-                prediction_record.created_at
+                prediction.created_at
         })
 
-        prediction_count += 1
-
     # ========================================================
-    # 8. FINAL RESPONSE
+    # 5. RETURN ONLY SAVED PREDICTIONS
     # ========================================================
 
     return {
@@ -992,11 +683,8 @@ def get_my_predictions(
                 student.name
         },
 
-        "total_subjects":
-            len(subjects),
-
         "total_predictions":
-            prediction_count,
+            len(result),
 
         "predictions":
             result
