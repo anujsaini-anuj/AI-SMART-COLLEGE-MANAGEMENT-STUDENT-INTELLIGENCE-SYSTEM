@@ -110,7 +110,23 @@ def get_ml_training_data(db: Session):
             continue
 
         # ----------------------------------------------------
-        # ADD TO DATASET
+        # CHECK PERCENTAGE RANGE
+        #
+        # All ML features and target must be between
+        # 0 and 100 percentage.
+        # ----------------------------------------------------
+
+        if not all(
+            0 <= value <= 100
+            for value in features
+        ):
+            continue
+
+        if not 0 <= target <= 100:
+            continue
+
+        # ----------------------------------------------------
+        # ADD VALID DATA TO DATASET
         # ----------------------------------------------------
 
         X.append(features)
