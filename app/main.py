@@ -26,6 +26,10 @@ from app.routers.recommendation import router as recommendation_router
 from app.routers.ai_assistant import router as ai_assistant_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers import intelligence
+from app.services.ml_scheduler import (
+    start_ml_scheduler,
+    stop_ml_scheduler
+)
 
 Base.metadata.create_all(bind=engine)
 
@@ -35,6 +39,19 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+@app.on_event("startup")
+def startup_event():
+
+    start_ml_scheduler()
+
+
+@app.on_event("shutdown")
+def shutdown_event():
+
+    stop_ml_scheduler()
+
+    
 @app.get("/")
 def root():
     return {
