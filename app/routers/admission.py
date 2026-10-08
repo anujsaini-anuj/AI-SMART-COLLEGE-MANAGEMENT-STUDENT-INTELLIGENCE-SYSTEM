@@ -99,6 +99,22 @@ def validate_academic_year(academic_year: str):
         )
 
 
+
+# ==================================================
+# GET MAXIMUM SEMESTER FROM COURSE DURATION
+# ==================================================
+
+def get_max_semester(duration_years: int):
+
+    if duration_years <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Course duration must be greater than 0 years."
+        )
+
+    return duration_years * 2
+
+
 # ==================================================
 # DIRECT STUDENT ENROLLMENT
 # ==================================================
@@ -123,7 +139,7 @@ def enroll_student(
 
     course_id: int = Form(...),
 
-    semester: int = Form(..., ge=1, le=8),
+    semester: int = Form(..., ge=1),
 
     academic_year: str = Form(...),
 
@@ -268,6 +284,24 @@ def enroll_student(
         raise HTTPException(
             status_code=404,
             detail="Course not found."
+        )
+
+
+
+    # -----------------------------------------
+    # VALIDATE SEMESTER ACCORDING TO COURSE DURATION
+    # -----------------------------------------
+
+    max_semester = get_max_semester(course.duration)
+
+    if semester > max_semester:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid semester {semester}. "
+                f"{course.name} is a {course.duration}-year course "
+                f"and supports only semesters 1 to {max_semester}."
+            )
         )
 
     # -----------------------------------------
@@ -619,8 +653,7 @@ def change_student_semester(
 
     new_semester: int = Form(
         ...,
-        ge=1,
-        le=8
+        ge=1
     ),
 
     reason: str | None = Form(
@@ -661,6 +694,37 @@ def change_student_semester(
         raise HTTPException(
             status_code=404,
             detail="Student not found"
+        )
+
+
+    # ----------------------------------------------
+    # CHECK STUDENT COURSE
+    # ----------------------------------------------
+
+    course = db.query(Course).filter(
+        Course.id == student.course_id
+    ).first()
+
+    if not course:
+        raise HTTPException(
+            status_code=404,
+            detail="Student course not found"
+        )
+
+    # ----------------------------------------------
+    # VALIDATE SEMESTER ACCORDING TO COURSE DURATION
+    # ----------------------------------------------
+
+    max_semester = get_max_semester(course.duration)
+
+    if new_semester > max_semester:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid semester {new_semester}. "
+                f"{course.name} is a {course.duration}-year course "
+                f"and supports only semesters 1 to {max_semester}."
+            )
         )
 
     # ----------------------------------------------
