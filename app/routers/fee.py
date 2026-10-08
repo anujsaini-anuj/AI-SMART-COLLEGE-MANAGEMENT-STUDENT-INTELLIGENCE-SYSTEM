@@ -49,6 +49,21 @@ def create_fee_structure(
             detail="Semester must be greater than 0"
         )
 
+
+
+    # Maximum semester according to course duration
+    # Example: BCA = 3 years -> 6 semesters
+    max_semester = course.duration * 2
+
+    if semester > max_semester:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid semester. This course has a maximum of "
+                f"{max_semester} semesters."
+            )
+        )
+
     # Validate fee
     if total_fee <= 0:
         raise HTTPException(
