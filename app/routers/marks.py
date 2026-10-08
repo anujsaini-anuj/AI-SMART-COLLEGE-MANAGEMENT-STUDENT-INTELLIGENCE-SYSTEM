@@ -91,7 +91,38 @@ def add_marks(
         )
 
     # --------------------------------------------------------
-    # 4. Validate exam type
+    # 4. Student-Subject academic validation
+    # --------------------------------------------------------
+    # Student can receive marks only if:
+    #
+    # Student's course == Subject's course
+    # AND
+    # Student's semester == Subject's semester
+    #
+    # This prevents faculty from entering marks for a student
+    # who does not belong to this subject academically.
+
+    if student.course_id != subject.course_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Student is not enrolled in this subject. "
+                "Student belongs to a different course."
+            )
+        )
+
+    if student.semester != subject.semester:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Student is not enrolled in this subject. "
+                "The student's current semester does not match "
+                "the subject semester."
+            )
+        )
+
+    # --------------------------------------------------------
+    # 5. Validate exam type
     # --------------------------------------------------------
 
     exam_type = exam_type.strip()
@@ -103,7 +134,7 @@ def add_marks(
         )
 
     # --------------------------------------------------------
-    # 5. Validate marks
+    # 6. Validate marks
     # --------------------------------------------------------
 
     if max_marks <= 0:
@@ -125,7 +156,7 @@ def add_marks(
         )
 
     # --------------------------------------------------------
-    # 6. Final exam date is required
+    # 7. Final exam date is required
     # --------------------------------------------------------
 
     is_final_exam = "final" in exam_type.lower()
@@ -137,7 +168,7 @@ def add_marks(
         )
 
     # --------------------------------------------------------
-    # 7. Add OR Update marks
+    # 8. Add OR Update marks
     # --------------------------------------------------------
 
     existing_marks = db.query(Marks).filter(
@@ -174,9 +205,8 @@ def add_marks(
         db.add(marks)
 
     # --------------------------------------------------------
-    # 8. Save marks FIRST
+    # 9. Save marks FIRST
     # --------------------------------------------------------
-    # Important:
     # Academic marks are primary data.
     # If ML automation fails later, marks should still remain saved.
 
@@ -214,7 +244,7 @@ def add_marks(
     }
 
     # --------------------------------------------------------
-    # 9. Automatically calculate Performance + Risk
+    # 10. Automatically calculate Performance + Risk
     # --------------------------------------------------------
 
     try:
@@ -248,7 +278,7 @@ def add_marks(
         }
 
     # --------------------------------------------------------
-    # 10. Final Exam → Historical ML Record
+    # 11. Final Exam → Historical ML Record
     # --------------------------------------------------------
 
     if is_final_exam:
@@ -287,11 +317,14 @@ def add_marks(
 
             automation["model_training"] = {
                 "status": "not_completed",
-                "message": "Marks were saved successfully, but automatic ML processing could not be completed."
+                "message": (
+                    "Marks were saved successfully, but automatic "
+                    "ML processing could not be completed."
+                )
             }
 
     # --------------------------------------------------------
-    # 11. Response
+    # 12. Response
     # --------------------------------------------------------
 
     return {
