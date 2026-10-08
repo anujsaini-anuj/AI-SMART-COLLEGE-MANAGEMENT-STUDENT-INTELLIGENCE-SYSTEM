@@ -18,6 +18,13 @@ from app.services.future_prediction_model import (
 
 
 # ============================================================
+# ATTENDANCE ELIGIBILITY
+# ============================================================
+
+MIN_ATTENDANCE_PERCENTAGE = 75
+
+
+# ============================================================
 # HELPER - GET STUDENT
 # ============================================================
 
@@ -465,6 +472,7 @@ def has_final_exam(
     )
 
 
+
 # ============================================================
 # CALCULATE FUTURE FEATURES
 # ============================================================
@@ -574,7 +582,34 @@ def calculate_future_features(
         )
     )
 
+    # --------------------------------------------------------
+    # ATTENDANCE ELIGIBILITY
+    #
+    # Important:
+    # Low attendance does NOT stop AI prediction.
+    #
+    # It only determines college eligibility status.
+    # --------------------------------------------------------
+
+    attendance_eligible = (
+        attendance_percentage
+        >= MIN_ATTENDANCE_PERCENTAGE
+    )
+
+    if attendance_eligible:
+
+        eligibility_status = "ELIGIBLE"
+
+    else:
+
+        eligibility_status = "NOT ELIGIBLE"
+
+    # --------------------------------------------------------
+    # RETURN FEATURES + ELIGIBILITY
+    # --------------------------------------------------------
+
     return {
+
         "attendance_percentage":
             attendance_percentage,
 
@@ -585,7 +620,13 @@ def calculate_future_features(
             assignment_percentage,
 
         "previous_exam_percentage":
-            previous_exam_percentage
+            previous_exam_percentage,
+
+        "attendance_eligible":
+            attendance_eligible,
+
+        "eligibility_status":
+            eligibility_status
     }
 
 
