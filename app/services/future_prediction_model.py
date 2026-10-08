@@ -386,6 +386,46 @@ def retrain_future_model_if_needed(
     )
 
     # ========================================================
+    # AUTOMATIC 1-DAY RETRAINING CHECK
+    # ========================================================
+
+    trained_at = existing_model.get(
+        "trained_at"
+    )
+
+    one_day_passed = False
+
+    if trained_at:
+
+        try:
+
+            last_trained_at = datetime.fromisoformat(
+                trained_at.replace(
+                    "Z",
+                    "+00:00"
+                )
+            )
+
+            current_time = datetime.now(
+                timezone.utc
+            )
+
+            elapsed_time = (
+                current_time - last_trained_at
+            )
+
+            if elapsed_time.total_seconds() >= 86400:
+
+                one_day_passed = True
+
+        except (
+            ValueError,
+            TypeError
+        ):
+
+            one_day_passed = False
+
+    # ========================================================
     # FORCE RETRAINING
     # ========================================================
 
@@ -422,18 +462,24 @@ def retrain_future_model_if_needed(
                 model_artifact
         }
 
+
     # ========================================================
-    # NORMAL NEW RECORD CHECK
+    # NORMAL NEW RECORD / 1-DAY RETRAINING CHECK
     # ========================================================
 
-    if new_records < minimum_new_records:
+    if (
+        new_records < minimum_new_records
+        and not one_day_passed
+    ):
 
         return {
             "retrained":
                 False,
 
             "reason":
-                "Retraining threshold not reached.",
+                "Retraining threshold not reached. "
+                "Model will retrain after 10 new records "
+                "or 1 day.",
 
             "training_samples":
                 current_samples,
@@ -461,8 +507,9 @@ def retrain_future_model_if_needed(
 
         "reason":
             (
-                "New historical data detected. "
-                "Model retrained."
+                "Model automatically retrained because "
+                "10 new records were added or 1 day "
+                "has passed since the last training."
             ),
 
         "training_samples":
@@ -479,7 +526,6 @@ def retrain_future_model_if_needed(
         "model":
             model_artifact
     }
-
 
 # ============================================================
 # LOAD MODEL
