@@ -1,53 +1,54 @@
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from app.database.database import SessionLocal
-from app.services.prediction_service import train_future_prediction_model
+from app.services.future_prediction_model import (
+    retrain_future_model_if_needed
+)
+
 
 
 # ============================================================
-# ML SCHEDULER
+# SCHEDULER
 # ============================================================
 
 scheduler = BackgroundScheduler()
 
 
+# ============================================================
+# AUTOMATIC ML MODEL CHECK
+# ============================================================
+
 def automatic_future_model_training():
-    """
-    Background job for Future Performance ML model.
-
-    This function runs automatically according to the
-    scheduler interval.
-
-    The existing train_future_prediction_model()
-    function decides whether retraining is actually required
-    based on the existing training rules.
-    """
 
     db = SessionLocal()
 
     try:
 
-        print(
-            "\n=================================================="
-        )
-        print(
-            "AUTOMATIC ML MODEL CHECK STARTED"
-        )
-        print(
-            "=================================================="
-        )
+        print("\n==================================================")
+        print("AUTOMATIC ML MODEL CHECK STARTED")
+        print("==================================================")
 
         try:
 
-            result = train_future_prediction_model(db)
+            result = retrain_future_model_if_needed(
+                db=db,
+                minimum_new_records=10
+            )
 
             print(
-                "Future Performance ML model check completed."
+                "Automatic Future Performance ML check completed."
             )
 
             if result:
+
                 print(
-                    f"Model: {result.get('model_name', 'N/A')}"
+                    f"Retrained: "
+                    f"{result.get('retrained', False)}"
+                )
+
+                print(
+                    f"Reason: "
+                    f"{result.get('reason', 'N/A')}"
                 )
 
                 print(
@@ -56,14 +57,11 @@ def automatic_future_model_training():
                 )
 
                 print(
-                    f"Trained at: "
-                    f"{result.get('trained_at', 'N/A')}"
+                    f"New records: "
+                    f"{result.get('new_records', 'N/A')}"
                 )
 
         except ValueError as e:
-
-            # Example:
-            # Not enough training data yet.
 
             print(
                 f"ML model was not retrained: {str(e)}"
@@ -72,7 +70,7 @@ def automatic_future_model_training():
         except Exception as e:
 
             print(
-                f"Automatic ML training failed: {str(e)}"
+                f"Automatic ML training check failed: {str(e)}"
             )
 
     finally:
@@ -84,18 +82,24 @@ def automatic_future_model_training():
         )
 
 
+# ============================================================
+# START SCHEDULER
+# ============================================================
+
 def start_ml_scheduler():
 
-    # --------------------------------------------------------
-    # Run the check every 1 hour
-    # --------------------------------------------------------
-
     scheduler.add_job(
+
         automatic_future_model_training,
+
         trigger="interval",
+
         hours=1,
+
         id="future_performance_ml_training",
+
         replace_existing=True,
+
         max_instances=1
     )
 
@@ -106,9 +110,14 @@ def start_ml_scheduler():
     )
 
     print(
-        "Future Performance model will be checked every 1 hour."
+        "Future Performance model will be checked "
+        "every 1 hour."
     )
 
+
+# ============================================================
+# STOP SCHEDULER
+# ============================================================
 
 def stop_ml_scheduler():
 

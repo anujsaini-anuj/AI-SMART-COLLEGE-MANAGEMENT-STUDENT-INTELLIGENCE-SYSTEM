@@ -229,7 +229,7 @@ def train_and_save_future_model(
 
 def retrain_future_model_if_needed(
     db: Session,
-    minimum_new_records: int = 1,
+    minimum_new_records: int = 10,
     force: bool = False
 ):
 
@@ -240,11 +240,10 @@ def retrain_future_model_if_needed(
 
     1. No model exists.
     2. Existing model is invalid.
-    3. Enough new ML records are available.
-    4. force=True is passed.
+    3. At least 10 new records are available.
+    4. 24 hours have passed since the last training.
+    5. force=True is passed.
 
-    force=True is important when an existing ML record
-    is updated but the total number of rows does not increase.
     """
 
     # --------------------------------------------------------
