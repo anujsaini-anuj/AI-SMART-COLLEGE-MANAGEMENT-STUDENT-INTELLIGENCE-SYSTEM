@@ -1989,13 +1989,10 @@ class StudentMLRecord(Base):
         default=lambda: datetime.now(timezone.utc)
     )
 
-    __table_args__ = (
-        UniqueConstraint(
-            "student_id",
-            "subject_id",
-            "previous_exam_percentage",
-            name="uq_student_ml_record"
-        ),
+    UniqueConstraint(
+        "student_id",
+        "subject_id",
+        name="uq_student_ml_student_subject"
     )
 
     student = relationship("Student")
