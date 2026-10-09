@@ -34,14 +34,12 @@ def add_marks(
     marks_obtained: int,
     max_marks: int,
     exam_date: date = None,
-
+    
     db: Session = Depends(get_db),
     current_faculty=Depends(require_faculty)
 ):
 
-    # --------------------------------------------------------
     # 1. Faculty-subject authorization
-    # --------------------------------------------------------
 
     faculty_subject = db.query(FacultySubject).filter(
         FacultySubject.subject_id == subject_id,
@@ -56,9 +54,7 @@ def add_marks(
             detail="You are not assigned to this subject"
         )
 
-    # --------------------------------------------------------
-    # 2. Student check
-    # --------------------------------------------------------
+    # 2. Student validation
 
     student = db.query(Student).filter(
         Student.student_id == student_id
@@ -76,9 +72,7 @@ def add_marks(
             detail="Student is inactive"
         )
 
-    # --------------------------------------------------------
-    # 3. Subject check
-    # --------------------------------------------------------
+    # 3. Subject validation
 
     subject = db.query(Subject).filter(
         Subject.id == subject_id
@@ -90,17 +84,7 @@ def add_marks(
             detail="Subject not found"
         )
 
-    # --------------------------------------------------------
-    # 4. Student-Subject academic validation
-    # --------------------------------------------------------
-    # Student can receive marks only if:
-    #
-    # Student's course == Subject's course
-    # AND
-    # Student's semester == Subject's semester
-    #
-    # This prevents faculty from entering marks for a student
-    # who does not belong to this subject academically.
+    # 4. Student-course and semester validation
 
     if student.course_id != subject.course_id:
         raise HTTPException(
@@ -121,9 +105,7 @@ def add_marks(
             )
         )
 
-    # --------------------------------------------------------
-    # 5. Validate exam type
-    # --------------------------------------------------------
+    # 5. Exam type validation
 
     exam_type = exam_type.strip()
 
@@ -133,9 +115,7 @@ def add_marks(
             detail="Exam type is required"
         )
 
-    # --------------------------------------------------------
-    # 6. Validate marks
-    # --------------------------------------------------------
+    # 6. Marks validation
 
     if max_marks <= 0:
         raise HTTPException(
@@ -155,9 +135,7 @@ def add_marks(
             detail="Obtained marks cannot be greater than maximum marks"
         )
 
-    # --------------------------------------------------------
-    # 7. Final exam date is required
-    # --------------------------------------------------------
+    # 7. Final exam date validation
 
     is_final_exam = "final" in exam_type.lower()
 
@@ -167,9 +145,7 @@ def add_marks(
             detail="Exam date is required for Final Exam marks"
         )
 
-    # --------------------------------------------------------
-    # 8. Add OR Update marks
-    # --------------------------------------------------------
+    # 8. Add or update marks
 
     existing_marks = db.query(Marks).filter(
         Marks.student_id == student_id,
@@ -180,10 +156,6 @@ def add_marks(
     action = "added"
 
     if existing_marks:
-
-        # Real-life system:
-        # Faculty can correct marks later.
-
         existing_marks.marks_obtained = marks_obtained
         existing_marks.max_marks = max_marks
         existing_marks.exam_date = exam_date
@@ -192,7 +164,6 @@ def add_marks(
         action = "updated"
 
     else:
-
         marks = Marks(
             student_id=student_id,
             subject_id=subject_id,
@@ -204,19 +175,13 @@ def add_marks(
 
         db.add(marks)
 
-    # --------------------------------------------------------
-    # 9. Save marks FIRST
-    # --------------------------------------------------------
-    # Academic marks are primary data.
-    # If ML automation fails later, marks should still remain saved.
+    # 9. Save marks first
 
     try:
-
         db.commit()
         db.refresh(marks)
 
     except Exception as e:
-
         db.rollback()
 
         raise HTTPException(
@@ -243,12 +208,9 @@ def add_marks(
         }
     }
 
-    # --------------------------------------------------------
-    # 10. Automatically calculate Performance + Risk
-    # --------------------------------------------------------
+    # 10. Automatically calculate performance and risk
 
     try:
-
         performance_result = calculate_and_update_performance(
             db=db,
             student_id=student_id,
@@ -266,7 +228,6 @@ def add_marks(
         }
 
     except Exception as e:
-
         automation["performance"] = {
             "status": "failed",
             "error": str(e)
@@ -274,26 +235,24 @@ def add_marks(
 
         automation["risk"] = {
             "status": "failed",
-            "error": "Risk was not updated because performance calculation failed"
+            "error": (
+                "Risk was not updated because "
+                "performance calculation failed"
+            )
         }
 
-    # --------------------------------------------------------
-    # 11. Final Exam → Historical ML Record
-    # --------------------------------------------------------
+    # 11. Final exam -> historical ML record
+    # This function returns exactly 3 values.
+    # Retraining is handled separately by the ML scheduler.
 
     if is_final_exam:
-
         try:
-
-            (
-                ml_record,
-                features,
-                final_percentage,
-                training_result
-            ) = create_historical_ml_record(
-                db=db,
-                student_id=student_id,
-                subject_id=subject_id
+            ml_record, features, final_percentage = (
+                create_historical_ml_record(
+                    db=db,
+                    student_id=student_id,
+                    subject_id=subject_id
+                )
             )
 
             automation["ml_record"] = {
@@ -304,12 +263,15 @@ def add_marks(
             }
 
             automation["model_training"] = {
-                "status": "completed",
-                "result": training_result
+                "status": "pending_scheduler_check",
+                "message": (
+                    "Historical ML record saved successfully. "
+                    "The automatic scheduler will check whether "
+                    "model retraining is required."
+                )
             }
 
         except Exception as e:
-
             automation["ml_record"] = {
                 "status": "failed",
                 "error": str(e)
@@ -323,9 +285,7 @@ def add_marks(
                 )
             }
 
-    # --------------------------------------------------------
     # 12. Response
-    # --------------------------------------------------------
 
     return {
         "message": f"Marks {action} successfully",
@@ -369,12 +329,10 @@ def get_all_marks(
     ).all()
 
     assigned_subject_ids = [
-        subject_id[0]
-        for subject_id in assigned_subject_ids
+        item[0] for item in assigned_subject_ids
     ]
 
     if not assigned_subject_ids:
-
         return {
             "total_records": 0,
             "marks": []
@@ -387,7 +345,6 @@ def get_all_marks(
     result = []
 
     for marks in marks_records:
-
         result.append({
             "marks_id": marks.id,
             "student_id": marks.student.student_id,
@@ -437,7 +394,6 @@ def get_my_marks(
     result = []
 
     for marks in marks_records:
-
         result.append({
             "marks_id": marks.id,
             "subject_id": marks.subject.id,
