@@ -726,8 +726,7 @@ def create_ml_record(
         (
             ml_record,
             features,
-            final_percentage,
-            training_result
+            final_percentage
         ) = create_historical_ml_record(
 
             db=db,
@@ -792,31 +791,6 @@ def create_ml_record(
 
             "actual_final_exam_percentage":
                 final_percentage
-        },
-
-
-        "automatic_training": {
-
-            "retrained":
-                training_result.get(
-                    "retrained",
-                    False
-                ),
-
-            "reason":
-                training_result.get(
-                    "reason"
-                ),
-
-            "training_samples":
-                training_result.get(
-                    "training_samples"
-                ),
-
-            "new_records":
-                training_result.get(
-                    "new_records"
-                )
         }
     }
 
