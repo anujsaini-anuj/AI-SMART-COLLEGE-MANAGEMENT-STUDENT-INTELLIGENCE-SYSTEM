@@ -156,6 +156,63 @@ def create_admin(
 
 
 # ==================================================
+# ADMIN PROMOTES EXISTING USER TO ADMIN
+# ==================================================
+
+@router.patch("/admin/promote-user")
+def promote_user_to_admin(
+    user_id: int = Form(...),
+
+    db: Session = Depends(get_db),
+
+    current_admin: User = Depends(require_admin)
+):
+    # Find existing user
+    user = db.query(User).filter(
+        User.id == user_id
+    ).first()
+
+    # Check user exists
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    # Check if user is already Admin
+    if user.role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is already an Admin"
+        )
+
+
+        
+    # Student ko chhodkar sabhi roles Admin ban sakte hain
+    if user.role == "student":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Student cannot be promoted to Admin"
+        )
+
+    previous_role = user.role
+    user.role = "admin"
+
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "message": f"{previous_role} successfully promoted to Admin",
+        "user_id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "previous_role": previous_role,
+        "current_role": user.role
+    }
+
+
+
+# ==================================================
 # ADMIN CREATES ADMISSION OFFICER
 # ==================================================
 
