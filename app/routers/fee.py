@@ -20,9 +20,11 @@ router = APIRouter(
 # ADMIN ONLY
 # ==================================================
 
+
 @router.post("/structure/create")
 def create_fee_structure(
     course_id: int = Form(...),
+    batch_year: int = Form(...),
     semester: int = Form(...),
     academic_year: str = Form(...),
     total_fee: int = Form(...),
@@ -30,8 +32,6 @@ def create_fee_structure(
     db: Session = Depends(get_db),
     current_admin: User = Depends(require_admin)
 ):
-
-    # Check course exists
     course = db.query(Course).filter(
         Course.id == course_id
     ).first()
@@ -42,38 +42,43 @@ def create_fee_structure(
             detail="Course not found"
         )
 
-    # Validate semester
+    if batch_year < 2000 or batch_year > 2100:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid batch year"
+        )
+
     if semester <= 0:
         raise HTTPException(
             status_code=400,
             detail="Semester must be greater than 0"
         )
 
-
-
-    # Maximum semester according to course duration
-    # Example: BCA = 3 years -> 6 semesters
     max_semester = course.duration * 2
 
     if semester > max_semester:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Invalid semester. This course has a maximum of "
-                f"{max_semester} semesters."
-            )
+            detail=f"Maximum semester for this course is {max_semester}"
         )
 
-    # Validate fee
     if total_fee <= 0:
         raise HTTPException(
             status_code=400,
             detail="Total fee must be greater than 0"
         )
 
-    # Check duplicate fee structure
+    academic_year = academic_year.strip()
+
+    if not academic_year:
+        raise HTTPException(
+            status_code=400,
+            detail="Academic year is required"
+        )
+
     existing_fee = db.query(FeeStructure).filter(
         FeeStructure.course_id == course_id,
+        FeeStructure.batch_year == batch_year,
         FeeStructure.semester == semester,
         FeeStructure.academic_year == academic_year
     ).first()
@@ -81,13 +86,16 @@ def create_fee_structure(
     if existing_fee:
         raise HTTPException(
             status_code=400,
-            detail="Fee structure already exists for this course, semester and academic year"
+            detail=(
+                "Fee structure already exists for this course, "
+                "batch, semester and academic year"
+            )
         )
 
     try:
-
         new_fee = FeeStructure(
             course_id=course_id,
+            batch_year=batch_year,
             semester=semester,
             academic_year=academic_year,
             total_fee=total_fee
@@ -100,8 +108,9 @@ def create_fee_structure(
         return {
             "message": "Fee structure created successfully",
             "fee_structure_id": new_fee.id,
-            "course_id": new_fee.course_id,
+            "course_id": course.id,
             "course_name": course.name,
+            "batch_year": new_fee.batch_year,
             "semester": new_fee.semester,
             "academic_year": new_fee.academic_year,
             "total_fee": new_fee.total_fee
@@ -113,7 +122,6 @@ def create_fee_structure(
             status_code=500,
             detail="Failed to create fee structure"
         )
-
 
 
 
@@ -164,6 +172,7 @@ def get_fee_structures(
 # ADMIN + ACCOUNTANT
 # ==================================================
 
+
 @router.post("/student/assign")
 def assign_student_fee(
     student_id: str = Form(...),
@@ -172,15 +181,12 @@ def assign_student_fee(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-
-    # Check role
     if current_user.role not in ["admin", "accountant"]:
         raise HTTPException(
             status_code=403,
             detail="Only Admin and Accountant can assign student fees"
         )
 
-    # Check student
     student = db.query(Student).filter(
         Student.student_id == student_id.strip()
     ).first()
@@ -191,7 +197,6 @@ def assign_student_fee(
             detail="Student not found"
         )
 
-    # Check fee structure
     fee_structure = db.query(FeeStructure).filter(
         FeeStructure.id == fee_structure_id
     ).first()
@@ -202,14 +207,28 @@ def assign_student_fee(
             detail="Fee structure not found"
         )
 
-    # Check student's course
     if student.course_id != fee_structure.course_id:
         raise HTTPException(
             status_code=400,
             detail="Fee structure does not belong to student's course"
         )
 
-    # Check duplicate assignment
+    if (
+        student.batch_year is None
+        or fee_structure.batch_year is None
+        or student.batch_year != fee_structure.batch_year
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Fee structure does not match student's batch"
+        )
+
+    if student.semester != fee_structure.semester:
+        raise HTTPException(
+            status_code=400,
+            detail="Fee structure does not match student's semester"
+        )
+
     existing_fee = db.query(StudentFee).filter(
         StudentFee.student_id == student.student_id,
         StudentFee.fee_structure_id == fee_structure_id
@@ -222,10 +241,9 @@ def assign_student_fee(
         )
 
     try:
-
         new_student_fee = StudentFee(
             student_id=student.student_id,
-            fee_structure_id=fee_structure_id,
+            fee_structure_id=fee_structure.id,
             total_fee=fee_structure.total_fee,
             paid_amount=0,
             pending_amount=fee_structure.total_fee,
@@ -241,10 +259,11 @@ def assign_student_fee(
             "message": "Student fee assigned successfully",
             "student_fee_id": new_student_fee.id,
             "student_id": student.student_id,
-            "student_database_id": student.id,
             "student_name": student.name,
+            "course_id": student.course_id,
+            "batch_year": student.batch_year,
+            "semester": student.semester,
             "fee_structure_id": fee_structure.id,
-            "course_id": fee_structure.course_id,
             "total_fee": new_student_fee.total_fee,
             "paid_amount": new_student_fee.paid_amount,
             "pending_amount": new_student_fee.pending_amount,
@@ -254,13 +273,122 @@ def assign_student_fee(
 
     except Exception:
         db.rollback()
-
         raise HTTPException(
             status_code=500,
             detail="Failed to assign student fee"
         )
 
 
+
+
+
+# ==================================================
+# BULK ASSIGN FEE BY COURSE + BATCH
+# ADMIN + ACCOUNTANT
+# ==================================================
+
+@router.post("/batch/assign")
+def assign_batch_fees(
+    fee_structure_id: int = Form(...),
+
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.role not in ["admin", "accountant"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Only Admin and Accountant can assign batch fees"
+        )
+
+    fee_structure = db.query(FeeStructure).filter(
+        FeeStructure.id == fee_structure_id
+    ).first()
+
+    if not fee_structure:
+        raise HTTPException(
+            status_code=404,
+            detail="Fee structure not found"
+        )
+
+    if fee_structure.batch_year is None:
+        raise HTTPException(
+            status_code=400,
+            detail="This fee structure has no batch year"
+        )
+
+    students = db.query(Student).filter(
+        Student.course_id == fee_structure.course_id,
+        Student.batch_year == fee_structure.batch_year,
+        Student.semester == fee_structure.semester,
+        Student.is_active.is_(True)
+    ).order_by(Student.student_id).all()
+
+    if not students:
+        raise HTTPException(
+            status_code=404,
+            detail="No active students found for this course, batch and semester"
+        )
+
+    assigned_students = []
+    skipped_students = []
+
+    try:
+        for student in students:
+            existing_fee = db.query(StudentFee).filter(
+                StudentFee.student_id == student.student_id,
+                StudentFee.fee_structure_id == fee_structure.id
+            ).first()
+
+            if existing_fee:
+                skipped_students.append({
+                    "student_id": student.student_id,
+                    "student_name": student.name,
+                    "reason": "Fee already assigned"
+                })
+                continue
+
+            student_fee = StudentFee(
+                student_id=student.student_id,
+                fee_structure_id=fee_structure.id,
+                total_fee=fee_structure.total_fee,
+                paid_amount=0,
+                pending_amount=fee_structure.total_fee,
+                payment_status="pending",
+                academic_year=fee_structure.academic_year
+            )
+
+            db.add(student_fee)
+
+            assigned_students.append({
+                "student_id": student.student_id,
+                "student_name": student.name,
+                "total_fee": fee_structure.total_fee
+            })
+
+        db.commit()
+
+        return {
+            "message": "Batch fee assignment completed",
+            "fee_structure_id": fee_structure.id,
+            "course_id": fee_structure.course_id,
+            "course_name": fee_structure.course.name,
+            "batch_year": fee_structure.batch_year,
+            "semester": fee_structure.semester,
+            "academic_year": fee_structure.academic_year,
+            "fee_per_student": fee_structure.total_fee,
+            "students_found": len(students),
+            "assigned_count": len(assigned_students),
+            "skipped_count": len(skipped_students),
+            "assigned_students": assigned_students,
+            "skipped_students": skipped_students
+        }
+
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to assign batch fees"
+        )
 
 
 

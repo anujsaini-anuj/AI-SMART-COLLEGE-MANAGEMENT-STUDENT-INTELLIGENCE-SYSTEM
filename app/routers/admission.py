@@ -139,6 +139,13 @@ def enroll_student(
 
     course_id: int = Form(...),
 
+
+    batch_year: int = Form(
+        ...,
+        ge=2000,
+        le=2100
+    ),
+
     semester: int = Form(..., ge=1),
 
     academic_year: str = Form(...),
@@ -375,6 +382,7 @@ def enroll_student(
             phone=normalized_phone,
             department_id=course.department_id,
             course_id=course_id,
+            batch_year=batch_year,
             semester=semester
         )
 
@@ -472,6 +480,8 @@ def enroll_student(
             "course": course.name,
 
             "department_id": new_student.department_id,
+
+            "batch_year": new_student.batch_year,
 
             "semester": new_student.semester,
 

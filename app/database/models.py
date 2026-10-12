@@ -785,6 +785,13 @@ class FeeStructure(Base):
         nullable=False
     )
 
+
+    batch_year = Column(
+        Integer,
+        nullable=True
+    )
+
+
     semester = Column(
         Integer,
         nullable=False
@@ -811,9 +818,10 @@ class FeeStructure(Base):
     __table_args__ = (
         UniqueConstraint(
             "course_id",
+            "batch_year",
             "semester",
             "academic_year",
-            name="unique_course_semester_academic_year"
+            name="unique_course_batch_semester_year"
         ),
     )
 
@@ -878,6 +886,16 @@ class StudentFee(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False
     )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "student_id",
+            "fee_structure_id",
+            name="unique_student_fee_structure"
+        ),
+    )
+
+
 
     student = relationship("Student")
 
@@ -1244,6 +1262,11 @@ class Student(Base):
         Integer,
         ForeignKey("courses.id"),
         nullable=False
+    )
+
+    batch_year = Column(
+        Integer,
+        nullable=True
     )
 
     semester = Column(
