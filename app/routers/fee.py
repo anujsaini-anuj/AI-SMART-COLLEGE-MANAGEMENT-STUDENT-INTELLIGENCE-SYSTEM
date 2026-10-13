@@ -1,6 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Form
 from sqlalchemy.orm import Session
 
+
+from datetime import date
+from typing import Optional
+
+
 from app.database.database import get_db
 from app.database.models import FeeStructure, Course, User, Student, StudentFee, FeePayment, FeeRefund
 from app.utils.auth import require_admin, get_current_user, require_student,  require_accountant
@@ -28,6 +33,9 @@ def create_fee_structure(
     semester: int = Form(...),
     academic_year: str = Form(...),
     total_fee: int = Form(...),
+    due_date: date = Form(...),
+    late_fee_per_day: int = Form(0),
+    late_fee_max: int = Form(0),
 
     db: Session = Depends(get_db),
     current_admin: User = Depends(require_admin)
@@ -42,30 +50,28 @@ def create_fee_structure(
             detail="Course not found"
         )
 
-    if batch_year < 2000 or batch_year > 2100:
+    if not 2000 <= batch_year <= 2100:
         raise HTTPException(
             status_code=400,
             detail="Invalid batch year"
         )
 
-    if semester <= 0:
+    if semester < 1 or semester > course.duration * 2:
         raise HTTPException(
             status_code=400,
-            detail="Semester must be greater than 0"
-        )
-
-    max_semester = course.duration * 2
-
-    if semester > max_semester:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Maximum semester for this course is {max_semester}"
+            detail=f"Semester must be between 1 and {course.duration * 2}"
         )
 
     if total_fee <= 0:
         raise HTTPException(
             status_code=400,
             detail="Total fee must be greater than 0"
+        )
+
+    if late_fee_per_day < 0 or late_fee_max < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Late fee values cannot be negative"
         )
 
     academic_year = academic_year.strip()
@@ -85,22 +91,25 @@ def create_fee_structure(
 
     if existing_fee:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail=(
                 "Fee structure already exists for this course, "
                 "batch, semester and academic year"
             )
         )
 
-    try:
-        new_fee = FeeStructure(
-            course_id=course_id,
-            batch_year=batch_year,
-            semester=semester,
-            academic_year=academic_year,
-            total_fee=total_fee
-        )
+    new_fee = FeeStructure(
+        course_id=course_id,
+        batch_year=batch_year,
+        semester=semester,
+        academic_year=academic_year,
+        total_fee=total_fee,
+        due_date=due_date,
+        late_fee_per_day=late_fee_per_day,
+        late_fee_max=late_fee_max
+    )
 
+    try:
         db.add(new_fee)
         db.commit()
         db.refresh(new_fee)
@@ -113,7 +122,10 @@ def create_fee_structure(
             "batch_year": new_fee.batch_year,
             "semester": new_fee.semester,
             "academic_year": new_fee.academic_year,
-            "total_fee": new_fee.total_fee
+            "total_fee": new_fee.total_fee,
+            "due_date": new_fee.due_date,
+            "late_fee_per_day": new_fee.late_fee_per_day,
+            "late_fee_max": new_fee.late_fee_max
         }
 
     except Exception:
@@ -122,7 +134,6 @@ def create_fee_structure(
             status_code=500,
             detail="Failed to create fee structure"
         )
-
 
 
 # ==================================================
@@ -153,9 +164,13 @@ def get_fee_structures(
             "fee_structure_id": fee.id,
             "course_id": fee.course_id,
             "course_name": fee.course.name,
+            "batch_year": fee.batch_year,
             "semester": fee.semester,
             "academic_year": fee.academic_year,
-            "total_fee": fee.total_fee
+            "total_fee": fee.total_fee,
+            "due_date": fee.due_date,
+            "late_fee_per_day": fee.late_fee_per_day,
+            "late_fee_max": fee.late_fee_max
         })
 
     return {

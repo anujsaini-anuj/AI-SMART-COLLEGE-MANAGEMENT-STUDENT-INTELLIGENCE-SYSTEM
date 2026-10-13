@@ -807,6 +807,15 @@ class FeeStructure(Base):
         nullable=False
     )
 
+    # Fee payment deadline
+    due_date = Column(Date, nullable=False)
+
+    # Late fee charged per day after due_date
+    late_fee_per_day = Column(Integer, nullable=False, default=0)
+
+    # Maximum total late fee; 0 means no maximum cap
+    late_fee_max = Column(Integer, nullable=False, default=0)
+
     created_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -823,6 +832,11 @@ class FeeStructure(Base):
             "academic_year",
             name="unique_course_batch_semester_year"
         ),
+        CheckConstraint("batch_year >= 2000 AND batch_year <= 2100"),
+        CheckConstraint("semester > 0"),
+        CheckConstraint("total_fee > 0"),
+        CheckConstraint("late_fee_per_day >= 0"),
+        CheckConstraint("late_fee_max >= 0"),
     )
 
 
