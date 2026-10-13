@@ -884,6 +884,14 @@ class StudentFee(Base):
         nullable=False
     )
 
+        
+    late_fee_amount = Column(
+        Integer,
+        nullable=False,
+        default=0
+    )
+
+
     payment_status = Column(
         String(20),
         default="pending",

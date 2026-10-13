@@ -20,6 +20,29 @@ router = APIRouter(
 )
 
 
+
+def calculate_late_fee(fee_structure, as_of_date=None):
+    """
+    Due date ke baad fixed per-day late fee calculate karta hai.
+    late_fee_max = 0 ka matlab no maximum cap.
+    """
+    if as_of_date is None:
+        as_of_date = date.today()
+
+    overdue_days = max(
+        0,
+        (as_of_date - fee_structure.due_date).days
+    )
+
+    late_fee = overdue_days * fee_structure.late_fee_per_day
+
+    if fee_structure.late_fee_max > 0:
+        late_fee = min(late_fee, fee_structure.late_fee_max)
+
+    return late_fee
+
+
+
 # ==================================================
 # CREATE FEE STRUCTURE
 # ADMIN ONLY
@@ -414,6 +437,7 @@ def assign_batch_fees(
 # ADMIN + ACCOUNTANT
 # ==================================================
 
+
 @router.post("/payment")
 def record_fee_payment(
     student_fee_id: int = Form(...),
@@ -424,24 +448,22 @@ def record_fee_payment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-
-    # Check authorization
+    # 1. Authorization
     if current_user.role not in ["admin", "accountant"]:
         raise HTTPException(
             status_code=403,
             detail="Only Admin and Accountant can record payments"
         )
 
-    # Validate amount
+    # 2. Validate amount
     if amount <= 0:
         raise HTTPException(
             status_code=400,
             detail="Payment amount must be greater than 0"
         )
 
-    # Validate payment method
+    # 3. Validate payment method
     allowed_methods = ["cash", "upi", "bank_transfer", "card"]
-
     payment_method = payment_method.lower().strip()
 
     if payment_method not in allowed_methods:
@@ -450,10 +472,13 @@ def record_fee_payment(
             detail="Invalid payment method"
         )
 
-    # Get student fee record
-    student_fee = db.query(StudentFee).filter(
-        StudentFee.id == student_fee_id
-    ).with_for_update().first()
+    # 4. Lock student fee record to avoid concurrent payments
+    student_fee = (
+        db.query(StudentFee)
+        .filter(StudentFee.id == student_fee_id)
+        .with_for_update()
+        .first()
+    )
 
     if not student_fee:
         raise HTTPException(
@@ -461,38 +486,77 @@ def record_fee_payment(
             detail="Student fee record not found"
         )
 
-    # Check if fee is already paid
+    # 5. Load associated fee structure
+    fee_structure = db.query(FeeStructure).filter(
+        FeeStructure.id == student_fee.fee_structure_id
+    ).first()
+
+    if not fee_structure:
+        raise HTTPException(
+            status_code=404,
+            detail="Associated fee structure not found"
+        )
+
+    # 6. Refresh late fee only while some fee remains unpaid.
+    # Once fully paid, the late fee is frozen.
+    if student_fee.pending_amount > 0:
+        current_late_fee = calculate_late_fee(fee_structure)
+
+        # Late fee cannot decrease if the structure's rule is later edited.
+        student_fee.late_fee_amount = max(
+            student_fee.late_fee_amount or 0,
+            current_late_fee
+        )
+
+        total_payable = (
+            student_fee.total_fee + student_fee.late_fee_amount
+        )
+
+        student_fee.pending_amount = max(
+            0,
+            total_payable - student_fee.paid_amount
+        )
+
+    # 7. Reject payment if the fee is already settled
     if student_fee.pending_amount <= 0:
         raise HTTPException(
             status_code=400,
             detail="Student fee is already fully paid"
         )
 
-    # Check overpayment
+    # 8. Prevent overpayment
     if amount > student_fee.pending_amount:
         raise HTTPException(
             status_code=400,
-            detail=f"Payment exceeds pending amount. Pending amount is {student_fee.pending_amount}"
+            detail=(
+                f"Payment exceeds pending amount. "
+                f"Current pending amount is {student_fee.pending_amount}, "
+                f"including late fee of {student_fee.late_fee_amount}."
+            )
         )
 
-    # Check duplicate transaction ID
+    # 9. Check duplicate transaction ID
     if transaction_id:
-        existing_transaction = db.query(FeePayment).filter(
-            FeePayment.transaction_id == transaction_id
-        ).first()
+        transaction_id = transaction_id.strip()
 
-        if existing_transaction:
-            raise HTTPException(
-                status_code=400,
-                detail="Transaction ID already exists"
-            )
+        if not transaction_id:
+            transaction_id = None
+        else:
+            existing_transaction = db.query(FeePayment).filter(
+                FeePayment.transaction_id == transaction_id
+            ).first()
+
+            if existing_transaction:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Transaction ID already exists"
+                )
 
     try:
-
-        # Generate receipt number
+        # 10. Generate receipt number
         receipt_number = f"FEE-{uuid4().hex[:12].upper()}"
 
-        # Create payment record
+        # 11. Create payment record
         new_payment = FeePayment(
             student_fee_id=student_fee.id,
             amount=amount,
@@ -502,11 +566,16 @@ def record_fee_payment(
             received_by=current_user.id
         )
 
-        # Update student fee
+        # 12. Update payment totals
         student_fee.paid_amount += amount
 
-        student_fee.pending_amount = (
-            student_fee.total_fee - student_fee.paid_amount
+        total_payable = (
+            student_fee.total_fee + student_fee.late_fee_amount
+        )
+
+        student_fee.pending_amount = max(
+            0,
+            total_payable - student_fee.paid_amount
         )
 
         if student_fee.pending_amount == 0:
@@ -515,7 +584,6 @@ def record_fee_payment(
             student_fee.payment_status = "partial"
 
         db.add(new_payment)
-
         db.commit()
 
         db.refresh(new_payment)
@@ -526,9 +594,14 @@ def record_fee_payment(
             "payment_id": new_payment.id,
             "receipt_number": new_payment.receipt_number,
             "student_fee_id": student_fee.id,
-            "amount_paid": new_payment.amount,
+            "amount_paid_now": new_payment.amount,
             "payment_method": new_payment.payment_method,
-            "total_fee": student_fee.total_fee,
+            "due_date": fee_structure.due_date,
+            "base_fee": student_fee.total_fee,
+            "late_fee": student_fee.late_fee_amount,
+            "total_payable": (
+                student_fee.total_fee + student_fee.late_fee_amount
+            ),
             "paid_amount": student_fee.paid_amount,
             "pending_amount": student_fee.pending_amount,
             "payment_status": student_fee.payment_status
@@ -536,13 +609,10 @@ def record_fee_payment(
 
     except Exception:
         db.rollback()
-
         raise HTTPException(
             status_code=500,
             detail="Failed to record fee payment"
         )
-
-
 
 
 
@@ -1003,8 +1073,14 @@ def create_fee_refund(
         # Update student fee balance
         student_fee.paid_amount -= amount
 
-        student_fee.pending_amount = (
-            student_fee.total_fee - student_fee.paid_amount
+        total_payable = (
+            student_fee.total_fee
+            + (student_fee.late_fee_amount or 0)
+        )
+
+        student_fee.pending_amount = max(
+            0,
+            total_payable - student_fee.paid_amount
         )
 
         if student_fee.paid_amount == 0:
