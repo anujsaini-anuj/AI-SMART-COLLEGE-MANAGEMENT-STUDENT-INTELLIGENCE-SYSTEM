@@ -1288,7 +1288,7 @@ class Student(Base):
 
     batch_year = Column(
         Integer,
-        nullable=True
+        nullable=False
     )
 
     semester = Column(
