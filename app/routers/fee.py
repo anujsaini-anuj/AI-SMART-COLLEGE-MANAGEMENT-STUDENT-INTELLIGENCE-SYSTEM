@@ -43,6 +43,75 @@ def calculate_late_fee(fee_structure, as_of_date=None):
 
 
 
+
+
+def refresh_student_fee_balance(
+    student_fee,
+    fee_structure,
+    as_of_date=None
+):
+    """
+    Recalculate the student's current fee balance.
+
+    Pending = Base fee + applicable late fee - net paid amount.
+
+    A fully settled fee does not continue accruing late fees.
+    If a refund reopens the balance, late fees can apply again.
+    """
+
+    if as_of_date is None:
+        as_of_date = date.today()
+
+    current_late_fee = student_fee.late_fee_amount or 0
+
+    # Recalculate late fee only if the account is still outstanding.
+    current_total_payable = (
+        student_fee.total_fee + current_late_fee
+    )
+
+    if student_fee.paid_amount < current_total_payable:
+        calculated_late_fee = calculate_late_fee(
+            fee_structure,
+            as_of_date
+        )
+
+        # Do not reduce previously accrued late fees.
+        student_fee.late_fee_amount = max(
+            current_late_fee,
+            calculated_late_fee
+        )
+
+    total_payable = (
+        student_fee.total_fee
+        + (student_fee.late_fee_amount or 0)
+    )
+
+    student_fee.pending_amount = max(
+        0,
+        total_payable - student_fee.paid_amount
+    )
+
+    if student_fee.pending_amount == 0:
+        student_fee.payment_status = "paid"
+    elif student_fee.paid_amount == 0:
+        student_fee.payment_status = "pending"
+    else:
+        student_fee.payment_status = "partial"
+
+    return {
+        "base_fee": student_fee.total_fee,
+        "late_fee": student_fee.late_fee_amount or 0,
+        "total_payable": total_payable,
+        "paid_amount": student_fee.paid_amount,
+        "pending_amount": student_fee.pending_amount,
+        "payment_status": student_fee.payment_status
+    }
+
+
+
+
+
+
 # ==================================================
 # CREATE FEE STRUCTURE
 # ADMIN ONLY
@@ -497,43 +566,34 @@ def record_fee_payment(
             detail="Associated fee structure not found"
         )
 
-    # 6. Refresh late fee only while some fee remains unpaid.
-    # Once fully paid, the late fee is frozen.
-    if student_fee.pending_amount > 0:
-        current_late_fee = calculate_late_fee(fee_structure)
+    
+    # 6. Refresh the balance before validating payment
+    balance = refresh_student_fee_balance(
+        student_fee,
+        fee_structure
+    )
 
-        # Late fee cannot decrease if the structure's rule is later edited.
-        student_fee.late_fee_amount = max(
-            student_fee.late_fee_amount or 0,
-            current_late_fee
-        )
-
-        total_payable = (
-            student_fee.total_fee + student_fee.late_fee_amount
-        )
-
-        student_fee.pending_amount = max(
-            0,
-            total_payable - student_fee.paid_amount
-        )
-
-    # 7. Reject payment if the fee is already settled
-    if student_fee.pending_amount <= 0:
+    # 7. Reject payment if already settled
+    if balance["pending_amount"] <= 0:
         raise HTTPException(
             status_code=400,
             detail="Student fee is already fully paid"
         )
 
     # 8. Prevent overpayment
-    if amount > student_fee.pending_amount:
+    if amount > balance["pending_amount"]:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"Payment exceeds pending amount. "
-                f"Current pending amount is {student_fee.pending_amount}, "
-                f"including late fee of {student_fee.late_fee_amount}."
+                f"Current pending amount is "
+                f"{balance['pending_amount']}, including late fee "
+                f"of {balance['late_fee']}."
             )
         )
+
+
+    
 
     # 9. Check duplicate transaction ID
     if transaction_id:
@@ -569,14 +629,13 @@ def record_fee_payment(
         # 12. Update payment totals
         student_fee.paid_amount += amount
 
-        total_payable = (
-            student_fee.total_fee + student_fee.late_fee_amount
+
+        balance = refresh_student_fee_balance(
+            student_fee,
+            fee_structure
         )
 
-        student_fee.pending_amount = max(
-            0,
-            total_payable - student_fee.paid_amount
-        )
+       
 
         if student_fee.pending_amount == 0:
             student_fee.payment_status = "paid"
@@ -787,32 +846,43 @@ def get_payment_receipt(
 # ADMIN + ACCOUNTANT
 # ==================================================
 
+
 @router.get("/pending")
 def get_pending_fees(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-
     if current_user.role not in ["admin", "accountant"]:
         raise HTTPException(
             status_code=403,
             detail="Only Admin and Accountant can view pending fees"
         )
 
-    pending_fees = (
-        db.query(StudentFee)
-        .filter(StudentFee.pending_amount > 0)
-        .all()
-    )
-
+    all_fee_records = db.query(StudentFee).all()
     result = []
 
-    for fee in pending_fees:
-
-        student = db.query(Student).filter(
-            Student.student_id  == fee.student_id
+    for fee in all_fee_records:
+        fee_structure = db.query(FeeStructure).filter(
+            FeeStructure.id == fee.fee_structure_id
         ).first()
 
+        if not fee_structure:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Fee structure not found for fee record {fee.id}"
+            )
+
+        balance = refresh_student_fee_balance(
+            fee,
+            fee_structure
+        )
+
+        if balance["pending_amount"] <= 0:
+            continue
+
+        student = db.query(Student).filter(
+            Student.student_id == fee.student_id
+        ).first()
 
         if not student:
             raise HTTPException(
@@ -826,12 +896,18 @@ def get_pending_fees(
             "student_database_id": student.id,
             "student_name": student.name,
             "fee_structure_id": fee.fee_structure_id,
-            "total_fee": fee.total_fee,
-            "paid_amount": fee.paid_amount,
-            "pending_amount": fee.pending_amount,
-            "payment_status": fee.payment_status,
+            "base_fee": balance["base_fee"],
+            "late_fee": balance["late_fee"],
+            "total_payable": balance["total_payable"],
+            "paid_amount": balance["paid_amount"],
+            "pending_amount": balance["pending_amount"],
+            "payment_status": balance["payment_status"],
+            "due_date": fee_structure.due_date,
             "academic_year": fee.academic_year
         })
+
+    # Persist the refreshed balances and statuses.
+    db.commit()
 
     return {
         "total_pending_students": len(result),
@@ -840,21 +916,18 @@ def get_pending_fees(
     }
 
 
-
-
-
-
 # ==================================================
 # GET FEE FINANCIAL REPORT
 # ADMIN + ACCOUNTANT
 # ==================================================
+
+
 
 @router.get("/report")
 def get_fee_report(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-
     if current_user.role not in ["admin", "accountant"]:
         raise HTTPException(
             status_code=403,
@@ -863,41 +936,57 @@ def get_fee_report(
 
     fee_records = db.query(StudentFee).all()
 
-    total_students = len(fee_records)
+    total_fee = 0
+    total_late_fee = 0
+    total_collected = 0
+    total_pending = 0
 
-    total_fee = sum(fee.total_fee for fee in fee_records)
+    fully_paid = 0
+    partially_paid = 0
+    unpaid = 0
 
-    total_collected = sum(fee.paid_amount for fee in fee_records)
+    for fee in fee_records:
+        fee_structure = db.query(FeeStructure).filter(
+            FeeStructure.id == fee.fee_structure_id
+        ).first()
 
-    total_pending = sum(fee.pending_amount for fee in fee_records)
+        if not fee_structure:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Fee structure not found for fee record {fee.id}"
+            )
 
-    fully_paid = sum(
-        1 for fee in fee_records
-        if fee.payment_status == "paid"
-    )
+        balance = refresh_student_fee_balance(
+            fee,
+            fee_structure
+        )
 
-    partially_paid = sum(
-        1 for fee in fee_records
-        if fee.payment_status == "partial"
-    )
+        total_fee += balance["base_fee"]
+        total_late_fee += balance["late_fee"]
+        total_collected += balance["paid_amount"]
+        total_pending += balance["pending_amount"]
 
-    unpaid = sum(
-        1 for fee in fee_records
-        if fee.payment_status == "pending"
-    )
+        if balance["payment_status"] == "paid":
+            fully_paid += 1
+        elif balance["payment_status"] == "partial":
+            partially_paid += 1
+        else:
+            unpaid += 1
+
+    db.commit()
 
     return {
-        "total_students": total_students,
-        "total_fee_assigned": total_fee,
-        "total_collected": total_collected,
+        "total_students": len(fee_records),
+        "total_base_fee_assigned": total_fee,
+        "total_late_fee": total_late_fee,
+        "total_payable": total_fee + total_late_fee,
+        "total_collected_net_of_refunds": total_collected,
         "total_pending": total_pending,
         "fully_paid_students": fully_paid,
         "partially_paid_students": partially_paid,
         "unpaid_students": unpaid,
         "message": "Fee financial report generated successfully"
     }
-
-
 
 
 # ==================================================
@@ -948,6 +1037,14 @@ def get_my_fees(
                 detail=f"Fee structure not found for fee record {fee.id}"
             )
 
+
+        
+        balance = refresh_student_fee_balance(
+            fee,
+            fee_structure
+        )
+
+
         course = db.query(Course).filter(
             Course.id == fee_structure.course_id
         ).first()
@@ -975,18 +1072,29 @@ def get_my_fees(
                 "payment_date": payment.payment_date
             })
 
+
+            
         fee_details.append({
             "student_fee_id": fee.id,
             "course_name": course.name,
             "semester": fee_structure.semester,
             "academic_year": fee.academic_year,
-            "total_fee": fee.total_fee,
-            "paid_amount": fee.paid_amount,
-            "pending_amount": fee.pending_amount,
-            "payment_status": fee.payment_status,
+            "due_date": fee_structure.due_date,
+            "base_fee": balance["base_fee"],
+            "late_fee": balance["late_fee"],
+            "total_payable": balance["total_payable"],
+            "paid_amount": balance["paid_amount"],
+            "pending_amount": balance["pending_amount"],
+            "payment_status": balance["payment_status"],
             "total_payments": len(payments),
             "payment_history": payment_history
         })
+
+        
+    db.commit()
+
+
+
 
     return {
         "student_id": student.student_id,
@@ -1073,24 +1181,23 @@ def create_fee_refund(
         # Update student fee balance
         student_fee.paid_amount -= amount
 
-        total_payable = (
-            student_fee.total_fee
-            + (student_fee.late_fee_amount or 0)
+
+        
+        fee_structure = db.query(FeeStructure).filter(
+            FeeStructure.id == student_fee.fee_structure_id
+        ).first()
+
+        if not fee_structure:
+            raise HTTPException(
+                status_code=404,
+                detail="Associated fee structure not found"
+            )
+
+        balance = refresh_student_fee_balance(
+            student_fee,
+            fee_structure
         )
 
-        student_fee.pending_amount = max(
-            0,
-            total_payable - student_fee.paid_amount
-        )
-
-        if student_fee.paid_amount == 0:
-            student_fee.payment_status = "pending"
-
-        elif student_fee.pending_amount == 0:
-            student_fee.payment_status = "paid"
-
-        else:
-            student_fee.payment_status = "partial"
 
         db.add(new_refund)
 
@@ -1099,6 +1206,7 @@ def create_fee_refund(
         db.refresh(new_refund)
         db.refresh(student_fee)
 
+        
         return {
             "message": "Fee refund processed successfully",
             "refund_id": new_refund.id,
@@ -1106,11 +1214,15 @@ def create_fee_refund(
             "refund_amount": new_refund.amount,
             "refund_reason": new_refund.reason,
             "refund_status": new_refund.refund_status,
-            "total_fee": student_fee.total_fee,
-            "paid_amount": student_fee.paid_amount,
-            "pending_amount": student_fee.pending_amount,
-            "payment_status": student_fee.payment_status
+            "base_fee": balance["base_fee"],
+            "late_fee": balance["late_fee"],
+            "total_payable": balance["total_payable"],
+            "paid_amount": balance["paid_amount"],
+            "pending_amount": balance["pending_amount"],
+            "payment_status": balance["payment_status"]
         }
+
+
 
     except Exception:
         db.rollback()
