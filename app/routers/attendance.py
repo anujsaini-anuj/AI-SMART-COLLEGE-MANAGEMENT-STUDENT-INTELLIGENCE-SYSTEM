@@ -86,6 +86,33 @@ def mark_attendance(
             detail="Subject not found"
         )
 
+
+        
+    # --------------------------------------------------
+    # VALIDATE STUDENT COURSE AND SEMESTER
+    # --------------------------------------------------
+
+    if student.course_id != subject.course_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Student {student.student_id} belongs to course "
+                f"{student.course_id}, but subject {subject.name} "
+                f"belongs to course {subject.course_id}."
+            )
+        )
+
+    if student.semester != subject.semester:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Student {student.student_id} is in semester "
+                f"{student.semester}, but subject {subject.name} "
+                f"belongs to semester {subject.semester}."
+            )
+        )
+
+
     # Use today's date if date is not provided
     if attendance_date is None:
         attendance_date = date.today()
