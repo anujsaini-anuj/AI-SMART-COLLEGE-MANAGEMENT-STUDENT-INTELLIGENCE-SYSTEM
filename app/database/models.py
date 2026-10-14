@@ -807,13 +807,10 @@ class FeeStructure(Base):
         nullable=False
     )
 
-    # Fee payment deadline
     due_date = Column(Date, nullable=False)
 
-    # Late fee charged per day after due_date
     late_fee_per_day = Column(Integer, nullable=False, default=0)
 
-    # Maximum total late fee; 0 means no maximum cap
     late_fee_max = Column(Integer, nullable=False, default=0)
 
     created_at = Column(
@@ -1095,19 +1092,16 @@ class Department(Base):
         nullable=False
     )
 
-    # Department → Faculty
     faculties = relationship(
         "Faculty",
         back_populates="department"
     )
 
-    # Department → Student
     students = relationship(
         "Student",
         back_populates="department"
     )
 
-    # Department → Course
     courses = relationship(
         "Course",
         back_populates="department"
@@ -1169,12 +1163,10 @@ class Faculty(Base):
         nullable=False
     )
 
-    # Faculty → User
     user = relationship(
         "User"
     )
 
-    # Faculty → Department
     department = relationship(
         "Department",
         back_populates="faculties"
@@ -1236,19 +1228,16 @@ class Course(Base):
         nullable=False
     )
 
-    # Course → Department
     department = relationship(
         "Department",
         back_populates="courses"
     )
 
-    # Course → Subjects
     subjects = relationship(
         "Subject",
         back_populates="course"
     )
 
-    # Course → Students
     students = relationship(
         "Student",
         back_populates="course"
@@ -1330,18 +1319,15 @@ class Student(Base):
         server_default="true"
     )
 
-    # Student → User
     user = relationship(
         "User"
     )
 
-    # Student → Department
     department = relationship(
         "Department",
         back_populates="students"
     )
 
-    # Student → Course
     course = relationship(
         "Course",
         back_populates="students"
@@ -1401,8 +1387,6 @@ class StudentSemesterHistory(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False
     )
-
-    # Relationships
 
     student = relationship(
         "Student",
@@ -1467,7 +1451,6 @@ class Subject(Base):
         nullable=False
     )
 
-    # Subject → Course
     course = relationship(
         "Course",
         back_populates="subjects"
@@ -1577,12 +1560,10 @@ class Attendance(Base):
         nullable=False
     )
 
-    # Attendance → Student
     student = relationship(
         "Student"
     )
 
-    # Attendance → Subject
     subject = relationship(
         "Subject"
     )
@@ -1651,12 +1632,10 @@ class Marks(Base):
         nullable=False
     )
 
-    # Marks → Student
     student = relationship(
         "Student"
     )
 
-    # Marks → Subject
     subject = relationship(
         "Subject"
     )
@@ -1731,12 +1710,10 @@ class Assignment(Base):
         nullable=False
     )
 
-    # Assignment → Student
     student = relationship(
         "Student"
     )
 
-    # Assignment → Subject
     subject = relationship(
         "Subject"
     )
@@ -1816,12 +1793,10 @@ class Performance(Base):
         nullable=False
     )
 
-    # Performance → Student
     student = relationship(
         "Student"
     )
 
-    # Performance → Subject
     subject = relationship(
         "Subject"
     )
