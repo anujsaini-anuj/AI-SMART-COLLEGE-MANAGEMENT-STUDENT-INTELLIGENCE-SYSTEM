@@ -1119,29 +1119,40 @@ def get_my_fees(
 @router.post("/refund")
 def create_fee_refund(
     student_fee_id: int = Form(...),
+    payment_id: int = Form(...),
     amount: int = Form(...),
     reason: str = Form(...),
 
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    """
+    Process a refund against a specific original fee payment.
 
-    # Check authorization
+    Rules:
+    - Only admin/accountant can process refunds.
+    - Refund amount must be positive.
+    - Refund cannot exceed the original payment's remaining refundable amount.
+    - Refund cannot exceed the student's current net paid amount.
+    - Refund record and balance update commit together.
+    - HTTPException status codes are preserved.
+    """
+
+    # 1. Authorization
     if current_user.role not in ["admin", "accountant"]:
         raise HTTPException(
             status_code=403,
             detail="Only Admin and Accountant can process refunds"
         )
 
-    # Validate refund amount
+    # 2. Basic validation
     if amount <= 0:
         raise HTTPException(
             status_code=400,
             detail="Refund amount must be greater than 0"
         )
 
-    # Validate reason
-    reason = reason.strip()
+    reason = (reason or "").strip()
 
     if not reason:
         raise HTTPException(
@@ -1149,93 +1160,170 @@ def create_fee_refund(
             detail="Refund reason is required"
         )
 
-    # Get student fee record
-    student_fee = db.query(StudentFee).filter(
-        StudentFee.id == student_fee_id
-    ).with_for_update().first()
-
-    if not student_fee:
-        raise HTTPException(
-            status_code=404,
-            detail="Student fee record not found"
-        )
-
-    # Check available paid amount
-    if amount > student_fee.paid_amount:
+    if len(reason) > 255:
         raise HTTPException(
             status_code=400,
-            detail=f"Refund exceeds paid amount. Paid amount is {student_fee.paid_amount}"
+            detail="Refund reason cannot exceed 255 characters"
         )
 
     try:
+        # 3. Lock the original payment first.
+        # This helps prevent simultaneous refunds against the same payment.
+        original_payment = (
+            db.query(FeePayment)
+            .filter(FeePayment.id == payment_id)
+            .with_for_update()
+            .first()
+        )
 
-        # Create refund record
+        if not original_payment:
+            raise HTTPException(
+                status_code=404,
+                detail="Original fee payment not found"
+            )
+
+        # 4. Lock the student's fee record.
+        student_fee = (
+            db.query(StudentFee)
+            .filter(StudentFee.id == student_fee_id)
+            .with_for_update()
+            .first()
+        )
+
+        if not student_fee:
+            raise HTTPException(
+                status_code=404,
+                detail="Student fee record not found"
+            )
+
+        # 5. Ensure payment belongs to this fee record.
+        if original_payment.student_fee_id != student_fee.id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "The selected payment does not belong "
+                    "to this student fee record"
+                )
+            )
+
+        # 6. Calculate previous refunds against this payment.
+        previous_refunds = (
+            db.query(FeeRefund)
+            .filter(
+                FeeRefund.payment_id == original_payment.id,
+                FeeRefund.refund_status == "processed"
+            )
+            .all()
+        )
+
+        already_refunded_for_payment = sum(
+            refund.amount for refund in previous_refunds
+        )
+
+        refundable_from_payment = max(
+            0,
+            original_payment.amount - already_refunded_for_payment
+        )
+
+        # 7. Do not refund more than this payment can support.
+        if amount > refundable_from_payment:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Refund exceeds remaining refundable amount "
+                    f"for payment {original_payment.id}. "
+                    f"Original payment: {original_payment.amount}, "
+                    f"already refunded: {already_refunded_for_payment}, "
+                    f"remaining refundable: {refundable_from_payment}"
+                )
+            )
+
+        # 8. Also protect the student's net paid balance.
+        if amount > student_fee.paid_amount:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Refund exceeds student's current net paid amount. "
+                    f"Current paid amount: {student_fee.paid_amount}"
+                )
+            )
+
+        # 9. Create refund audit record.
         new_refund = FeeRefund(
             student_fee_id=student_fee.id,
+            payment_id=original_payment.id,
+            receipt_number=f"REF-{uuid4().hex[:12].upper()}",
             amount=amount,
             reason=reason,
             refund_status="processed",
             processed_by=current_user.id
         )
 
-        # Update student fee balance
+        # 10. Update balances in the same transaction.
         student_fee.paid_amount -= amount
 
-
-        
-        fee_structure = db.query(FeeStructure).filter(
-            FeeStructure.id == student_fee.fee_structure_id
-        ).first()
-
-        if not fee_structure:
-            raise HTTPException(
-                status_code=404,
-                detail="Associated fee structure not found"
-            )
-
-        balance = refresh_student_fee_balance(
-            student_fee,
-            fee_structure
+        total_payable = (
+            student_fee.total_fee
+            + (student_fee.late_fee_amount or 0)
         )
 
+        student_fee.pending_amount = max(
+            0,
+            total_payable - student_fee.paid_amount
+        )
+
+        if student_fee.pending_amount == 0:
+            student_fee.payment_status = "paid"
+        elif student_fee.paid_amount == 0:
+            student_fee.payment_status = "pending"
+        else:
+            student_fee.payment_status = "partial"
 
         db.add(new_refund)
 
+        # Refund record and balance update commit together.
         db.commit()
 
         db.refresh(new_refund)
         db.refresh(student_fee)
 
-        
         return {
             "message": "Fee refund processed successfully",
             "refund_id": new_refund.id,
+            "payment_id": original_payment.id,
+            "receipt_number": original_payment.receipt_number,
+            "refund_receipt_number": new_refund.receipt_number,
             "student_fee_id": student_fee.id,
             "refund_amount": new_refund.amount,
             "refund_reason": new_refund.reason,
             "refund_status": new_refund.refund_status,
-            "base_fee": balance["base_fee"],
-            "late_fee": balance["late_fee"],
-            "total_payable": balance["total_payable"],
-            "paid_amount": balance["paid_amount"],
-            "pending_amount": balance["pending_amount"],
-            "payment_status": balance["payment_status"]
+            "processed_by": current_user.id,
+            "original_payment_amount": original_payment.amount,
+            "previously_refunded_from_payment":
+                already_refunded_for_payment,
+            "remaining_refundable_from_payment":
+                refundable_from_payment - amount,
+            "total_fee": student_fee.total_fee,
+            "late_fee_amount": student_fee.late_fee_amount or 0,
+            "paid_amount": student_fee.paid_amount,
+            "pending_amount": student_fee.pending_amount,
+            "payment_status": student_fee.payment_status
         }
 
-
+    except HTTPException:
+        # Keep the original 400/403/404 status and message.
+        db.rollback()
+        raise
 
     except Exception:
+        # Roll back all uncommitted changes on unexpected failures.
         db.rollback()
-
         raise HTTPException(
             status_code=500,
-            detail="Failed to process fee refund"
+            detail="Failed to process fee refund. No changes were committed."
         )
 
-
-
-
-
+    
 # ==================================================
 # GET REFUND HISTORY
 # ADMIN + ACCOUNTANT

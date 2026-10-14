@@ -1001,8 +1001,24 @@ class FeeRefund(Base):
     student_fee_id = Column(
         Integer,
         ForeignKey("student_fees.id"),
-        nullable=False
+        nullable=False,
+        index=True
     )
+
+    payment_id = Column(
+        Integer,
+        ForeignKey("fee_payments.id"),
+        nullable=True,
+        index=True
+    )
+
+        
+    receipt_number = Column(
+        String(50),
+        unique=True,
+        nullable=True
+    )
+
 
     amount = Column(
         Integer,
@@ -1033,8 +1049,12 @@ class FeeRefund(Base):
     )
 
     student_fee = relationship("StudentFee")
-
+    payment = relationship("FeePayment")
     accountant = relationship("User")
+
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="check_fee_refund_amount_positive"),
+    )
 
 
 
