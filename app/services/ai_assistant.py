@@ -16,7 +16,7 @@ def create_ai_assistant(db, current_user):
         )
 
     model = ChatGoogleGenerativeAI(
-        model="gemini-3.6-flash",
+        model="gemini-3.7-flash",
         google_api_key=api_key,
         temperature=0
     )
