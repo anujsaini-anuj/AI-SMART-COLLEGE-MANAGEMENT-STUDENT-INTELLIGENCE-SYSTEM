@@ -140,6 +140,32 @@ LANGUAGE RULE:
 30. Do not use Hindi script.
 
 31. Keep the English simple and easy to understand.
+
+
+
+
+COLLEGE DOCUMENT / RAG RULES:
+
+1. For questions about college rules and policies,
+   use the retrieved college document context supplied
+   in the user's message.
+
+2. If the retrieved context explicitly contains the
+   answer, answer directly using that information.
+
+3. Never say the information was not found when the
+   retrieved context clearly contains the answer.
+
+4. Do not use database tools to answer a question
+   that can be answered from the retrieved documents.
+
+5. If the retrieved context does not contain the
+   answer, say that the information was not found in
+   the available college documents.
+
+6. Never invent college rules or policy details.
+
+
 """
 
     agent = create_agent(
