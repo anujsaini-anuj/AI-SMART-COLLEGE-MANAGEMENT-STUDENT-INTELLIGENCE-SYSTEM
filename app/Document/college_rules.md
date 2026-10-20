@@ -1,4 +1,3 @@
-
 # College Rules
 
 ## Attendance Policy
@@ -26,10 +25,20 @@
 [ Students must contact the college admission office for admission-related queries.]
 
 ## Examination Policy
-[Enter examination eligibility and approved examination rules.]
+[
+1. Students must maintain at least 75% attendance to be eligible to appear for their final examinations.
+
+2. Students must carry their college identity card and examination admit card to the examination hall.
+
+3. Students must follow all examination rules and instructions issued by the college.
+
+4. Students must not use unauthorized materials or engage in unfair practices during examinations.
+
+ ]
 
 
+## College Office Hours
+[ The college office operates Monday to Friday, from 9:00 AM to 4:00 PM.]
 
-9. The college office operates Monday to Friday, from 9:00 AM to 4:00 PM.
-
-10. Students should contact their Head of Department for department-related academic queries.
+## Academic Queries
+[Students should contact their Head of Department for department-related academic queries.]
