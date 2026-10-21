@@ -16,6 +16,11 @@ from pgvector.psycopg2 import register_vector
 from app.database.database import engine
 
 
+import mimetypes
+import zipfile
+
+import fitz  # PyMuPDF
+
 load_dotenv()
 
 
@@ -39,7 +44,7 @@ MIN_RELEVANCE_SCORE = 0.65
 
 # Increment this when chunking/indexing logic changes in a way
 # that requires regenerating all document embeddings.
-INDEXER_VERSION = "2"
+INDEXER_VERSION = "3"
 
 # Set this to true only when you intentionally want to clear
 # the entire index because no supported documents remain.
@@ -97,9 +102,8 @@ def embed_text(client, text, task_type):
     return vector
 
 
-
 # ============================================================
-# DOCUMENT LOADING: TXT, MARKDOWN, PDF, DOCX
+# DOCUMENT LOADING: TEXT + PDF OCR/VISION + DOCX IMAGES
 # ============================================================
 
 SUPPORTED_EXTENSIONS = {
@@ -107,43 +111,228 @@ SUPPORTED_EXTENSIONS = {
     ".md",
     ".pdf",
     ".docx",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".bmp",
+    ".gif",
 }
 
+VISION_ENABLED = (
+    os.getenv("RAG_VISION_ENABLED", "true").strip().lower()
+    == "true"
+)
 
-def _extract_pdf_text(path):
-    """
-    Extract selectable text from a PDF.
-    OCR is intentionally not used.
-    """
+VISION_MODEL = os.getenv(
+    "GEMINI_VISION_MODEL",
+    "gemini-3.6-flash",
+)
 
-    reader = PdfReader(str(path))
+# Avoid sending unusually large images to the Vision API.
+MAX_IMAGE_BYTES = 15 * 1024 * 1024
 
-    if reader.is_encrypted:
+
+def _get_mime_type(path):
+    """Return an image MIME type based on the file extension."""
+
+    mime_type, _ = mimetypes.guess_type(str(path))
+
+    if not mime_type or not mime_type.startswith("image/"):
         raise ValueError(
-            "PDF is encrypted and cannot be read without a password."
+            f"Unsupported image MIME type for: {path}"
         )
+
+    return mime_type
+
+
+def _describe_image(
+    image_bytes,
+    mime_type,
+    context="",
+    client=None,
+):
+    """
+    Extract readable text and useful visual information
+    from an image using Gemini Vision.
+
+    Returns ordinary text so that the existing RAG chunking
+    and embedding pipeline can process it.
+    """
+
+    if not VISION_ENABLED:
+        return ""
+
+    if not image_bytes:
+        return ""
+
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        raise ValueError(
+            "Image exceeds the configured 15 MB limit. "
+            "Resize or compress it before indexing."
+        )
+
+    if client is None:
+        client = get_client()
+
+    prompt = f"""
+You are extracting information from a college document image.
+
+Document context:
+{context or "No additional context available."}
+
+Instructions:
+1. Transcribe all readable text accurately.
+2. Preserve dates, amounts, percentages, names, IDs,
+   headings, labels and numbered rules.
+3. For tables, write each row in a readable text format.
+4. For timetables, preserve day, time, subject and room.
+5. For fee documents, preserve amounts, due dates and fines.
+6. Describe diagrams, charts, stamps or visual information
+   only when they convey useful document information.
+7. If some text is unreadable, say so instead of guessing.
+8. Do not invent missing information.
+9. Return plain text suitable for a search index.
+"""
+
+    response = client.models.generate_content(
+        model=VISION_MODEL,
+        contents=[
+            types.Part.from_bytes(
+                data=image_bytes,
+                mime_type=mime_type,
+            ),
+            prompt,
+        ],
+    )
+
+    extracted = getattr(response, "text", None)
+
+    if not extracted or not extracted.strip():
+        raise RuntimeError(
+            "Gemini Vision returned no readable text."
+        )
+
+    return extracted.strip()
+
+
+def _extract_pdf_text(path, client=None):
+    """
+    Extract selectable PDF text first.
+
+    If a page is scanned or contains embedded images,
+    render that page and use Gemini Vision.
+
+    Each extracted section includes its original page number.
+    """
+
+    if not VISION_ENABLED:
+        # Preserve the old selectable-text behavior.
+        reader = PdfReader(str(path))
+
+        if reader.is_encrypted:
+            raise ValueError(
+                "PDF is encrypted and cannot be read without "
+                "a password."
+            )
+
+        page_texts = []
+
+        for page_number, page in enumerate(
+            reader.pages,
+            start=1,
+        ):
+            text = (page.extract_text() or "").strip()
+
+            if text:
+                page_texts.append(
+                    f"Page {page_number}:\n{text}"
+                )
+
+        return "\n\n".join(page_texts).strip()
+
+    if client is None:
+        client = get_client()
 
     page_texts = []
 
-    for page_number, page in enumerate(reader.pages, start=1):
-        text = page.extract_text() or ""
-
-        if text.strip():
-            page_texts.append(
-                f"Page {page_number}:\n{text.strip()}"
+    # PyMuPDF can extract page text and render scanned pages.
+    with fitz.open(str(path)) as pdf:
+        if pdf.needs_pass:
+            raise ValueError(
+                "PDF is encrypted and requires a password."
             )
+
+        for page_index, page in enumerate(pdf, start=1):
+            page_number = page_index
+
+            selectable_text = (
+                page.get_text("text") or ""
+            ).strip()
+
+            # Detect embedded raster images on this page.
+            try:
+                image_list = page.get_images(full=True)
+                has_images = bool(image_list)
+            except Exception:
+                has_images = False
+
+            sections = []
+
+            if selectable_text:
+                sections.append(
+                    "Extracted PDF text:\n" + selectable_text
+                )
+
+            # Use Vision for scanned pages or pages containing
+            # images. The rendered page preserves page context.
+            needs_vision = (
+                not selectable_text or has_images
+            )
+
+            if needs_vision:
+                pixmap = page.get_pixmap(
+                    matrix=fitz.Matrix(1.5, 1.5),
+                    alpha=False,
+                )
+
+                image_bytes = pixmap.tobytes("png")
+
+                vision_text = _describe_image(
+                    image_bytes=image_bytes,
+                    mime_type="image/png",
+                    context=(
+                        f"PDF file: {path.name}; "
+                        f"page number: {page_number}"
+                    ),
+                    client=client,
+                )
+
+                if vision_text:
+                    sections.append(
+                        "Image/OCR extracted information:\n"
+                        + vision_text
+                    )
+
+            if sections:
+                page_texts.append(
+                    f"Document: {path.name}\n"
+                    f"Page {page_number}:\n"
+                    + "\n\n".join(sections)
+                )
 
     return "\n\n".join(page_texts).strip()
 
 
-def _extract_docx_text(path):
+def _extract_docx_text(path, client=None):
     """
-    Extract text from DOCX paragraphs and tables.
-    No OCR is used.
+    Extract DOCX paragraphs, tables and embedded images.
+
+    Embedded raster images are read from the DOCX ZIP package
+    and sent to Gemini Vision.
     """
 
     document = WordDocument(str(path))
-
     parts = []
 
     # Extract paragraphs.
@@ -153,10 +342,10 @@ def _extract_docx_text(path):
         if text:
             parts.append(text)
 
-    # Extract table contents.
+    # Extract tables.
     for table_number, table in enumerate(
         document.tables,
-        start=1
+        start=1,
     ):
         table_rows = []
 
@@ -175,37 +364,164 @@ def _extract_docx_text(path):
                 + "\n".join(table_rows)
             )
 
+    # Extract embedded images from the DOCX package.
+    if VISION_ENABLED:
+        with zipfile.ZipFile(path, "r") as archive:
+            image_names = sorted(
+                name
+                for name in archive.namelist()
+                if name.startswith("word/media/")
+                and not name.endswith("/")
+            )
+
+            for image_name in image_names:
+                image_bytes = archive.read(image_name)
+
+                extension = Path(image_name).suffix.lower()
+
+                mime_type = mimetypes.guess_type(
+                    image_name
+                )[0]
+
+                if (
+                    not mime_type
+                    or not mime_type.startswith("image/")
+                    or mime_type == "image/svg+xml"
+                ):
+                    continue
+
+                extracted = _describe_image(
+                    image_bytes=image_bytes,
+                    mime_type=mime_type,
+                    context=(
+                        f"DOCX file: {path.name}; "
+                        f"embedded image: {image_name}"
+                    ),
+                    client=client,
+                )
+
+                if extracted:
+                    parts.append(
+                        f"Embedded image ({image_name}):\n"
+                        f"{extracted}"
+                    )
+
     return "\n\n".join(parts).strip()
+
+
+def _extract_markdown_images(path, markdown_text, client=None):
+    """
+    Extract local images referenced by Markdown, for example:
+
+        ![College timetable](images/timetable.png)
+
+    The image path must remain inside app/Document.
+    External URLs are intentionally not downloaded.
+    """
+
+    if not VISION_ENABLED:
+        return ""
+
+    pattern = re.compile(
+        r"!\[([^\]]*)\]\(([^)]+)\)"
+    )
+
+    extracted_parts = []
+
+    for match in pattern.finditer(markdown_text):
+        alt_text = match.group(1).strip()
+        target = match.group(2).strip()
+
+        # Support paths containing optional Markdown titles.
+        target = target.split('"')[0].strip()
+        target = target.split("'")[0].strip()
+
+        # Ignore URLs, anchors and data URLs.
+        if re.match(
+            r"^(https?://|data:|#)",
+            target,
+            flags=re.IGNORECASE,
+        ):
+            continue
+
+        # Ignore query/fragment suffixes.
+        target = target.split("#", 1)[0]
+        target = target.split("?", 1)[0]
+
+        image_path = (path.parent / target).resolve()
+
+        try:
+            image_path.relative_to(DOCUMENT_DIR.resolve())
+        except ValueError:
+            # Do not allow references outside the document folder.
+            continue
+
+        if not image_path.is_file():
+            continue
+
+        try:
+            mime_type = _get_mime_type(image_path)
+            image_bytes = image_path.read_bytes()
+
+            extracted = _describe_image(
+                image_bytes=image_bytes,
+                mime_type=mime_type,
+                context=(
+                    f"Markdown file: {path.name}; "
+                    f"image alt text: {alt_text or 'not provided'}"
+                ),
+                client=client,
+            )
+
+            if extracted:
+                extracted_parts.append(
+                    f"Markdown image: {target}\n"
+                    f"Alt text: {alt_text}\n"
+                    f"Extracted information:\n{extracted}"
+                )
+
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to process Markdown image "
+                f"'{target}' referenced by '{path.name}': {exc}"
+            ) from exc
+
+    return "\n\n".join(extracted_parts).strip()
 
 
 def load_documents(return_report=False):
     """
-    Load supported files recursively from app/Document.
+    Load documents recursively from app/Document.
 
-    Supported:
-        .txt, .md, .pdf, .docx
+    Text and Markdown:
+        Read text; analyze local Markdown image references.
 
     PDF:
-        Extract selectable text only. No OCR.
+        Extract selectable text and use Vision for scanned
+        pages or pages with embedded images.
 
     DOCX:
-        Extract paragraphs and tables.
+        Extract paragraphs, tables and embedded images.
 
-    Unsupported files and extraction failures are reported.
+    Standalone images:
+        Extract readable text and useful visual information.
 
-    Existing callers can still use load_documents() and
-    receive only the document list. The indexer can call
-    load_documents(return_report=True) to receive the report.
+    Output remains compatible with the existing indexer:
+        [{"source": "...", "text": "..."}]
+
+    Failed files are preserved from accidental index deletion.
     """
 
     if not DOCUMENT_DIR.exists():
         raise FileNotFoundError(
-            f"RAG document directory does not exist: {DOCUMENT_DIR}"
+            f"RAG document directory does not exist: "
+            f"{DOCUMENT_DIR}"
         )
 
     if not DOCUMENT_DIR.is_dir():
         raise NotADirectoryError(
-            f"RAG document path is not a directory: {DOCUMENT_DIR}"
+            f"RAG document path is not a directory: "
+            f"{DOCUMENT_DIR}"
         )
 
     documents = []
@@ -219,8 +535,18 @@ def load_documents(return_report=False):
         "preserve_sources": [],
     }
 
-    for path in sorted(DOCUMENT_DIR.rglob("*")):
+    # Reuse one Gemini client per indexing run.
+    client = None
 
+    def get_vision_client():
+        nonlocal client
+
+        if client is None:
+            client = get_client()
+
+        return client
+
+    for path in sorted(DOCUMENT_DIR.rglob("*")):
         if not path.is_file():
             continue
 
@@ -232,8 +558,6 @@ def load_documents(return_report=False):
 
         extension = path.suffix.lower()
 
-        # Report unsupported file formats instead of
-        # silently skipping them.
         if extension not in SUPPORTED_EXTENSIONS:
             report["unsupported_files"].append({
                 "source": source,
@@ -245,21 +569,65 @@ def load_documents(return_report=False):
         report["supported_files"].append(source)
 
         try:
-            if extension in {".txt", ".md"}:
+            if extension == ".txt":
                 content = path.read_text(
                     encoding="utf-8-sig"
                 ).strip()
 
+            elif extension == ".md":
+                markdown_text = path.read_text(
+                    encoding="utf-8-sig"
+                ).strip()
+
+                image_text = ""
+
+                if VISION_ENABLED:
+                    image_text = _extract_markdown_images(
+                        path,
+                        markdown_text,
+                        client=get_vision_client(),
+                    )
+
+                content = "\n\n".join(
+                    part
+                    for part in [
+                        markdown_text,
+                        image_text,
+                    ]
+                    if part
+                ).strip()
+
             elif extension == ".pdf":
-                content = _extract_pdf_text(path)
+                content = _extract_pdf_text(
+                    path,
+                    client=(
+                        get_vision_client()
+                        if VISION_ENABLED
+                        else None
+                    ),
+                )
 
             elif extension == ".docx":
-                content = _extract_docx_text(path)
+                content = _extract_docx_text(
+                    path,
+                    client=(
+                        get_vision_client()
+                        if VISION_ENABLED
+                        else None
+                    ),
+                )
 
             else:
-                # Defensive fallback if supported formats
-                # are extended in the future.
-                continue
+                # Standalone image file.
+                content = _describe_image(
+                    image_bytes=path.read_bytes(),
+                    mime_type=_get_mime_type(path),
+                    context=(
+                        f"Standalone college document image: "
+                        f"{path.name}"
+                    ),
+                    client=get_vision_client(),
+                )
 
         except Exception as exc:
             report["failed_files"].append({
@@ -269,28 +637,21 @@ def load_documents(return_report=False):
                 ),
             })
 
-            # Do not remove a previously indexed source merely
-            # because its current file could not be read.
+            # Preserve an old indexed version if extraction fails.
             report["preserve_sources"].append(source)
             continue
 
-        if not content:
+        if not content or not content.strip():
             report["empty_text_files"].append({
                 "source": source,
                 "reason": (
-                    "No extractable text found. "
-                    "If this is a scanned PDF, OCR would be "
-                    "required, but OCR is disabled."
-                    if extension == ".pdf"
-                    else "The file contains no extractable text."
+                    "No text could be extracted from this file."
                 ),
             })
 
-            # A scanned/textless PDF must not cause an existing
-            # indexed version of the same source to be deleted.
-            if extension == ".pdf":
-                report["preserve_sources"].append(source)
-
+            # Keep the old indexed source when extraction returns
+            # empty content; do not accidentally delete its chunks.
+            report["preserve_sources"].append(source)
             continue
 
         documents.append({
@@ -298,7 +659,6 @@ def load_documents(return_report=False):
             "text": content,
         })
 
-    # Remove duplicate preservation paths while retaining order.
     report["preserve_sources"] = list(
         dict.fromkeys(report["preserve_sources"])
     )
@@ -307,7 +667,6 @@ def load_documents(return_report=False):
         return documents, report
 
     return documents
-
 
 # ============================================================
 # DOCUMENT CHUNKING
@@ -711,6 +1070,18 @@ def build_rag_index():
         return_report=True
     )
 
+    print("RAG document scan report:")
+    print(json.dumps(load_report, indent=2, ensure_ascii=False))
+
+    if not documents and (
+        load_report["failed_files"]
+        or load_report["empty_text_files"]
+    ):
+        raise RuntimeError(
+            "No readable documents were extracted. "
+            "Indexing stopped; inspect the report before retrying."
+        )
+
     # Step 2: Ensure the vector table and hash column exist.
     _initialize_vector_table()
 
@@ -751,6 +1122,17 @@ def build_rag_index():
         document["source"]
         for document, _ in prepared_documents
     }
+
+
+    if (
+        not prepared_documents
+        and existing_hashes
+        and not ALLOW_EMPTY_INDEX
+    ):
+        raise ValueError(
+            "No usable document chunks were generated. "
+            "The existing RAG index was preserved."
+        )
 
     # Step 5: Find files that have been deleted, emptied,
     # or no longer produce any usable chunks.

@@ -51,83 +51,125 @@ def get_cited_sources(answer: str, retrieved_sources: list) -> list:
 
 def classify_question(question: str) -> str:
     """
-    Return one of:
+    Classify questions into:
         database_only
         policy_only
         combined
         general
-
-    Database-only questions skip RAG embeddings.
-    Policy and combined questions attempt RAG retrieval.
     """
 
+    # STEP 1: Document, image, chart and poster questions
+    visual_document_pattern = re.compile(
+        r"\b("
+        r"chart|poster|diagram|image|picture|photo|visual|"
+        r"figure|illustration|screenshot|pdf|document|"
+        r"scanned|warning|label|caption|written|shown|"
+        r"displayed|read|exactly|text"
+        r")\b",
+        re.IGNORECASE,
+    )
+
+    hinglish_visual_pattern = re.compile(
+        r"(ke neeche|ke upar|mein kya likha|"
+        r"kya likha hai|kya dikhaya|exactly kya|"
+        r"poster par|chart par|document mein)",
+        re.IGNORECASE,
+    )
+
+    if (
+        visual_document_pattern.search(question)
+        or hinglish_visual_pattern.search(question)
+    ):
+        return "policy_only"
+
+    # STEP 2: College policy and eligibility questions
     policy_pattern = re.compile(
         r"\b("
         r"policy|policies|rules?|regulations?|procedures?|"
         r"eligib\w*|requirements?|minimum|maximum|"
         r"late fee|fine|borrowing period|"
-        r"attendance.{0,25}(required|minimum|eligib\w*|exam)|"
-        r"how many books.{0,30}borrow|"
-        r"books.{0,30}borrow"
-        r")\b",
+        r"exam|examination|"
+        r"condonation|exemption"
+        r")\b"
+        r"|attendance.{0,40}"
+        r"(required|minimum|eligib\w*|exam|below|less than|under|kam|75)"
+        r"|attendance.{0,40}(?:75\s*%)"
+        r"|(?:below|less than|under|kam)\s*75\s*%?"
+        r"|(?:75\s*%).{0,40}(exam|eligib\w*)",
         re.IGNORECASE,
     )
 
+    # STEP 3: Live database questions
     live_data_pattern = re.compile(
         r"\b("
         r"my|mine|current|actual|record|records|"
         r"marks|scores|performance|risk|recommendations?|"
         r"fee balance|fees paid|payment status|"
         r"admission status|transaction|"
-        r"check|show|get|find"
+        r"check|get|find|show"
         r")\b",
         re.IGNORECASE,
     )
 
     academic_record_pattern = re.compile(
-        r"\b(attendance|marks|scores|performance|fees?|"
-        r"admission|student record|risk|recommendations?)\b",
+        r"\b("
+        r"attendance|marks|scores|performance|fees?|"
+        r"admission|student record|risk|recommendations?"
+        r")\b",
         re.IGNORECASE,
     )
 
-    has_policy_intent = bool(policy_pattern.search(question))
+    has_policy_intent = bool(
+        policy_pattern.search(question)
+    )
+
     has_live_data_intent = bool(
         live_data_pattern.search(question)
     )
+
     has_academic_record = bool(
         academic_record_pattern.search(question)
     )
 
-    # Explicit policy questions can also require a live record.
-    # Examples: "Is Anuj eligible?" or "Is my attendance enough?"
+    # English and Hinglish ways of referring to a person
     asks_about_person = bool(
-    re.search(
-        r"\b(my|mine|me|I|his|her|their)\b",
-        question,
-        re.IGNORECASE,
+        re.search(
+            r"\b(my|mine|me|I|his|her|their)\b",
+            question,
+            re.IGNORECASE,
+        )
+        or re.search(
+            r"\b(meri|mera|mere|mujhe|hamari|hamara|"
+            r"hamare|apni|apna|apne)\b",
+            question,
+            re.IGNORECASE,
+        )
+        or re.search(
+            r"\b(?:for|of)\s+[A-Z][a-z]+"
+            r"(?:\s+[A-Z][a-z]+)?\b",
+            question,
+        )
+        or re.search(
+            r"^\s*(?:is|does|can|will|should|has|have)\s+"
+            r"[A-Z][a-z]+",
+            question,
+        )
+        or re.search(
+            r"^\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+"
+            r"(?:attendance|marks|scores|performance|fees?)\b",
+            question,
+            re.IGNORECASE,
+        )
     )
-    or re.search(
-        r"\b(?:for|of)\s+[A-Z][a-z]+"
-        r"(?:\s+[A-Z][a-z]+)?\b",
-        question,
-    )
-    or re.search(
-        r"^\s*(?:is|does|can|will|should|has|have)\s+"
-        r"[A-Z][a-z]+",
-        question,
-    )
-    or re.search(
-        r"^\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+"
-        r"(?:attendance|marks|scores|performance|fees?)\b",
-        question,
-        re.IGNORECASE,
-    )
-)
 
+    # STEP 4: Select the retrieval route
     if has_policy_intent:
         if (
             has_academic_record
-            and (has_live_data_intent or asks_about_person)
+            and (
+                has_live_data_intent
+                or asks_about_person
+            )
         ):
             return "combined"
 
@@ -136,10 +178,7 @@ def classify_question(question: str) -> str:
     if has_academic_record or has_live_data_intent:
         return "database_only"
 
-    # For ambiguous college-information questions, try RAG.
     return "general"
-
-
 
 
 @router.post("/chat")
