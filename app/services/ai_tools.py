@@ -10,8 +10,23 @@ from app.database.models import (
     Subject,
     Faculty,
     FacultySubject,
-    Course
+    Course,
+    HOD,
+    Accountant,
+    Librarian,
+    AdmissionOfficer,
+    AdmissionApplication,
+    FeeStructure,
+    StudentFee,
+    FeePayment,
+    Book,
+    BookCopy,
+    BookIssue,
+    LibraryFine
+
 )
+
+from sqlalchemy import func, or_, case
 
 from langchain_core.tools import tool
 
@@ -2301,6 +2316,544 @@ def create_ai_tools(
             student_risk,
             student_recommendations
         ]
+
+
+    
+    # ========================================================
+    # HOD / ACCOUNTANT / LIBRARIAN / ADMISSION OFFICER
+    # ROLE-SPECIFIC READ-ONLY AI TOOLS
+    # ========================================================
+
+    elif current_user.role in [
+        "hod",
+        "accountant",
+        "librarian",
+        "admission_officer",
+    ]:
+
+        # ====================================================
+        # HOD: OWN DEPARTMENT ONLY
+        # ====================================================
+
+        if current_user.role == "hod":
+
+            hod = db.query(HOD).filter(
+                HOD.user_id == current_user.id
+            ).first()
+
+            if not hod:
+                return []
+
+            department_id = hod.department_id
+
+            @tool
+            def hod_department_summary():
+                """
+                Get summary counts for the logged-in HOD's
+                own department only.
+                """
+
+                students_count = (
+                    db.query(Student)
+                    .filter(
+                        Student.department_id == department_id,
+                        Student.is_active.is_(True),
+                    )
+                    .count()
+                )
+
+                faculty_count = (
+                    db.query(Faculty)
+                    .filter(
+                        Faculty.department_id == department_id
+                    )
+                    .count()
+                )
+
+                course_count = (
+                    db.query(Course)
+                    .filter(
+                        Course.department_id == department_id
+                    )
+                    .count()
+                )
+
+                return {
+                    "department_id": department_id,
+                    "active_students": students_count,
+                    "faculty_count": faculty_count,
+                    "course_count": course_count,
+                }
+
+            @tool
+            def hod_low_attendance_students(
+                threshold: float = 75
+            ):
+                """
+                Get students with attendance below the given
+                threshold in the logged-in HOD's department.
+                """
+
+                if threshold < 0 or threshold > 100:
+                    return {
+                        "error": "Threshold must be between 0 and 100."
+                    }
+
+                records = (
+                    db.query(Performance, Student, Subject)
+                    .join(
+                        Student,
+                        Student.student_id == Performance.student_id
+                    )
+                    .join(
+                        Subject,
+                        Subject.id == Performance.subject_id
+                    )
+                    .join(
+                        Course,
+                        Course.id == Student.course_id
+                    )
+                    .filter(
+                        Student.department_id == department_id,
+                        Course.department_id == department_id,
+                        Subject.course_id == Student.course_id,
+                        Subject.semester == Student.semester,
+                        Student.is_active.is_(True),
+                        Performance.attendance_percentage < threshold,
+                    )
+                    .order_by(
+                        Performance.attendance_percentage.asc()
+                    )
+                    .limit(100)
+                    .all()
+                )
+
+                return {
+                    "department_id": department_id,
+                    "threshold": threshold,
+                    "students": [
+                        {
+                            "student_id": student.student_id,
+                            "student_name": student.name,
+                            "subject_name": subject.name,
+                            "attendance_percentage": float(
+                                performance.attendance_percentage or 0
+                            ),
+                        }
+                        for performance, student, subject in records
+                    ],
+                }
+
+            return [
+                hod_department_summary,
+                hod_low_attendance_students,
+            ]
+
+        # ====================================================
+        # ACCOUNTANT: FEE INFORMATION ONLY
+        # ====================================================
+
+        if current_user.role == "accountant":
+
+            accountant = db.query(Accountant).filter(
+                Accountant.user_id == current_user.id
+            ).first()
+
+            if not accountant:
+                return []
+
+            @tool
+            def fee_summary():
+                """
+                Get college-wide fee totals for the accountant.
+                This tool only reads financial records.
+                """
+
+                row = db.query(
+                    func.count(StudentFee.id),
+                    func.coalesce(func.sum(StudentFee.total_fee), 0),
+                    func.coalesce(func.sum(StudentFee.paid_amount), 0),
+                    func.coalesce(func.sum(StudentFee.pending_amount), 0),
+                    func.coalesce(func.sum(StudentFee.late_fee_amount), 0),
+                ).first()
+
+                return {
+                    "fee_records": int(row[0] or 0),
+                    "total_fee_amount": float(row[1] or 0),
+                    "total_paid_amount": float(row[2] or 0),
+                    "total_pending_amount": float(row[3] or 0),
+                    "recorded_late_fee_amount": float(row[4] or 0),
+                }
+
+            @tool
+            def student_fee_status(student_id: str):
+                """
+                Get fee status and recent payment history
+                for a specific student.
+                """
+
+                student_id = student_id.strip()
+
+                if not student_id:
+                    return {"error": "Student ID cannot be empty."}
+
+                student = db.query(Student).filter(
+                    Student.student_id == student_id,
+                    Student.is_active.is_(True),
+                ).first()
+
+                if not student:
+                    return {"error": "Active student not found."}
+
+                fee_rows = (
+                    db.query(StudentFee, FeeStructure, Course)
+                    .join(
+                        FeeStructure,
+                        FeeStructure.id == StudentFee.fee_structure_id
+                    )
+                    .join(
+                        Course,
+                        Course.id == FeeStructure.course_id
+                    )
+                    .filter(
+                        StudentFee.student_id == student_id
+                    )
+                    .order_by(StudentFee.created_at.desc())
+                    .limit(20)
+                    .all()
+                )
+
+                fees = []
+
+                for fee, structure, course in fee_rows:
+                    payments = (
+                        db.query(FeePayment)
+                        .filter(
+                            FeePayment.student_fee_id == fee.id
+                        )
+                        .order_by(FeePayment.payment_date.desc())
+                        .limit(10)
+                        .all()
+                    )
+
+                    fees.append({
+                        "fee_record_id": fee.id,
+                        "course_name": course.name,
+                        "academic_year": fee.academic_year,
+                        "total_fee": float(fee.total_fee or 0),
+                        "paid_amount": float(fee.paid_amount or 0),
+                        "pending_amount": float(fee.pending_amount or 0),
+                        "late_fee_amount": float(fee.late_fee_amount or 0),
+                        "payment_status": fee.payment_status,
+                        "due_date": str(structure.due_date),
+                        "recent_payments": [
+                            {
+                                "amount": float(payment.amount),
+                                "receipt_number": payment.receipt_number,
+                                "payment_date": str(payment.payment_date),
+                                "payment_method": payment.payment_method,
+                            }
+                            for payment in payments
+                        ],
+                    })
+
+                return {
+                    "student_id": student.student_id,
+                    "student_name": student.name,
+                    "fees": fees,
+                }
+
+            return [
+                fee_summary,
+                student_fee_status,
+            ]
+
+        # ====================================================
+        # LIBRARIAN: BOOKS / LOANS / LIBRARY FINES
+        # ====================================================
+
+        if current_user.role == "librarian":
+
+            librarian = db.query(Librarian).filter(
+                Librarian.user_id == current_user.id
+            ).first()
+
+            if not librarian:
+                return []
+
+            @tool
+            def search_library_books(search_text: str):
+                """
+                Search book titles, authors, or categories
+                and return copy availability.
+                """
+
+                search_text = search_text.strip()
+
+                if not search_text:
+                    return {"error": "Search text cannot be empty."}
+
+                escaped = (
+                    search_text
+                    .replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_")
+                )
+                pattern = f"%{escaped}%"
+
+                rows = (
+                    db.query(
+                        Book,
+                        func.count(BookCopy.id).label("total_copies"),
+                        func.sum(
+                            case(
+                                (BookCopy.status == "available", 1),
+                                else_=0,
+                            )
+                        ).label("available_copies"),
+                    )
+                    .outerjoin(
+                        BookCopy,
+                        BookCopy.book_id == Book.id
+                    )
+                    .filter(
+                        or_(
+                            Book.title.ilike(pattern, escape="\\"),
+                            Book.author.ilike(pattern, escape="\\"),
+                            Book.category.ilike(pattern, escape="\\"),
+                        )
+                    )
+                    .group_by(Book.id)
+                    .order_by(Book.title.asc())
+                    .limit(20)
+                    .all()
+                )
+
+                return {
+                    "books": [
+                        {
+                            "book_id": book.id,
+                            "title": book.title,
+                            "author": book.author,
+                            "category": book.category,
+                            "total_copies": int(total or 0),
+                            "available_copies": int(available or 0),
+                        }
+                        for book, total, available in rows
+                    ]
+                }
+
+            @tool
+            def student_library_loans(student_id: str):
+                """
+                Get current issued books for a student.
+                """
+
+                student_id = student_id.strip()
+
+                if not student_id:
+                    return {"error": "Student ID cannot be empty."}
+
+                student = db.query(Student).filter(
+                    Student.student_id == student_id,
+                    Student.is_active.is_(True),
+                ).first()
+
+                if not student:
+                    return {"error": "Active student not found."}
+
+                rows = (
+                    db.query(BookIssue, BookCopy, Book)
+                    .join(
+                        BookCopy,
+                        BookCopy.id == BookIssue.book_copy_id
+                    )
+                    .join(
+                        Book,
+                        Book.id == BookCopy.book_id
+                    )
+                    .filter(
+                        BookIssue.student_id == student_id,
+                        BookIssue.status == "issued",
+                    )
+                    .order_by(BookIssue.due_date.asc())
+                    .limit(50)
+                    .all()
+                )
+
+                return {
+                    "student_id": student.student_id,
+                    "student_name": student.name,
+                    "issued_books": [
+                        {
+                            "issue_id": issue.id,
+                            "title": book.title,
+                            "accession_number": copy.accession_number,
+                            "issue_date": str(issue.issue_date),
+                            "due_date": str(issue.due_date),
+                            "fine_amount": float(issue.fine_amount or 0),
+                        }
+                        for issue, copy, book in rows
+                    ],
+                }
+
+            @tool
+            def pending_library_fines():
+                """
+                List pending library fines for the librarian.
+                """
+
+                rows = (
+                    db.query(LibraryFine, Student)
+                    .join(
+                        Student,
+                        Student.student_id == LibraryFine.student_id
+                    )
+                    .filter(
+                        LibraryFine.status == "pending"
+                    )
+                    .order_by(LibraryFine.forwarded_at.desc())
+                    .limit(100)
+                    .all()
+                )
+
+                return {
+                    "pending_fines": [
+                        {
+                            "fine_id": fine.id,
+                            "student_id": student.student_id,
+                            "student_name": student.name,
+                            "fine_amount": float(fine.fine_amount),
+                            "reason": fine.reason,
+                            "status": fine.status,
+                            "forwarded_at": str(fine.forwarded_at),
+                        }
+                        for fine, student in rows
+                    ]
+                }
+
+            return [
+                search_library_books,
+                student_library_loans,
+                pending_library_fines,
+            ]
+
+        # ====================================================
+        # ADMISSION OFFICER: ADMISSION RECORDS ONLY
+        # ====================================================
+
+        if current_user.role == "admission_officer":
+
+            officer = db.query(AdmissionOfficer).filter(
+                AdmissionOfficer.user_id == current_user.id
+            ).first()
+
+            if not officer:
+                return []
+
+            @tool
+            def search_admission_records(search_text: str):
+                """
+                Search admission records by applicant name
+                or application number.
+                """
+
+                search_text = search_text.strip()
+
+                if not search_text:
+                    return {"error": "Search text cannot be empty."}
+
+                escaped = (
+                    search_text
+                    .replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_")
+                )
+                pattern = f"%{escaped}%"
+
+                rows = (
+                    db.query(AdmissionApplication, Course)
+                    .join(
+                        Course,
+                        Course.id == AdmissionApplication.course_id
+                    )
+                    .filter(
+                        or_(
+                            AdmissionApplication.applicant_name.ilike(
+                                pattern, escape="\\"
+                            ),
+                            AdmissionApplication.application_number.ilike(
+                                pattern, escape="\\"
+                            ),
+                        )
+                    )
+                    .order_by(
+                        AdmissionApplication.submitted_at.desc()
+                    )
+                    .limit(20)
+                    .all()
+                )
+
+                return {
+                    "admissions": [
+                        {
+                            "application_number": application.application_number,
+                            "applicant_name": application.applicant_name,
+                            "course_name": course.name,
+                            "semester": application.semester,
+                            "academic_year": application.academic_year,
+                            "status": application.status,
+                            "enrolled_student_id": application.enrolled_student_id,
+                        }
+                        for application, course in rows
+                    ]
+                }
+
+            @tool
+            def admission_course_summary():
+                """
+                Count enrolled admission records by course
+                and academic year.
+                """
+
+                rows = (
+                    db.query(
+                        Course.name,
+                        AdmissionApplication.academic_year,
+                        func.count(AdmissionApplication.id),
+                    )
+                    .join(
+                        AdmissionApplication,
+                        AdmissionApplication.course_id == Course.id
+                    )
+                    .group_by(
+                        Course.name,
+                        AdmissionApplication.academic_year,
+                    )
+                    .order_by(
+                        AdmissionApplication.academic_year.desc(),
+                        Course.name.asc(),
+                    )
+                    .limit(100)
+                    .all()
+                )
+
+                return {
+                    "enrollment_summary": [
+                        {
+                            "course_name": course_name,
+                            "academic_year": academic_year,
+                            "enrolled_applications": int(total),
+                        }
+                        for course_name, academic_year, total in rows
+                    ]
+                }
+
+            return [
+                search_admission_records,
+                admission_course_summary,
+            ]
+
 
     # ========================================================
     # UNKNOWN ROLE

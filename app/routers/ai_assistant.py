@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Form
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
-from app.database.models import Student
+from app.database.models import Student, HOD, Accountant, Librarian, AdmissionOfficer
 
 from app.utils.auth import get_current_user
 
@@ -59,15 +59,16 @@ def classify_question(question: str) -> str:
     """
 
     # STEP 1: Document, image, chart and poster questions
+    
     visual_document_pattern = re.compile(
         r"\b("
         r"chart|poster|diagram|image|picture|photo|visual|"
         r"figure|illustration|screenshot|pdf|document|"
-        r"scanned|warning|label|caption|written|shown|"
-        r"displayed|read|exactly|text"
+        r"scanned|warning|label|caption"
         r")\b",
         re.IGNORECASE,
     )
+
 
     hinglish_visual_pattern = re.compile(
         r"(ke neeche|ke upar|mein kya likha|"
@@ -101,15 +102,18 @@ def classify_question(question: str) -> str:
 
     # STEP 3: Live database questions
     live_data_pattern = re.compile(
-        r"\b("
-        r"my|mine|current|actual|record|records|"
-        r"marks|scores|performance|risk|recommendations?|"
-        r"fee balance|fees paid|payment status|"
-        r"admission status|transaction|"
-        r"check|get|find|show"
-        r")\b",
-        re.IGNORECASE,
-    )
+    r"\b("
+    r"my|mine|current|actual|record|records|"
+    r"marks|scores|performance|risk|recommendations?|"
+    r"fee|fees|payment|payments|balance|"
+    r"admission|enrollment|transaction|"
+    r"library|libraries|book|books|loan|loans|"
+    r"fine|fines|department|faculty|course|courses|"
+    r"search|check|get|find|show|list|summary|"
+    r"issued|overdue|pending"
+    r")\b",
+    re.IGNORECASE,
+)
 
     academic_record_pattern = re.compile(
         r"\b("
@@ -236,6 +240,76 @@ through authorized database tools.
 Current user role: admin.
 Admin can access authorized college information.
 """
+
+
+    elif current_user.role in [
+        "hod",
+        "accountant",
+        "librarian",
+        "admission_officer",
+    ]:
+
+        profile_models = {
+            "hod": HOD,
+            "accountant": Accountant,
+            "librarian": Librarian,
+            "admission_officer": AdmissionOfficer,
+        }
+
+        profile_model = profile_models[current_user.role]
+
+        profile = db.query(profile_model).filter(
+            profile_model.user_id == current_user.id
+        ).first()
+
+        if not profile:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "AI Assistant profile not found for this role."
+                ),
+            )
+
+        if current_user.role == "hod":
+            user_context = """
+Current user role: HOD.
+
+You may use only the HOD tools for your own department.
+Do not reveal records from other departments.
+Do not claim to perform write operations.
+"""
+
+        elif current_user.role == "accountant":
+            user_context = """
+Current user role: accountant.
+
+You may use only the accountant's read-only fee tools.
+Financial data must come from the database.
+Never claim to process payments or refunds.
+Do not reveal passwords, authentication tokens, or secrets.
+"""
+
+        elif current_user.role == "librarian":
+            user_context = """
+Current user role: librarian.
+
+You may use only the librarian's read-only book,
+loan, and library-fine tools.
+Never claim to issue or return a book or to process
+a fine payment.
+"""
+
+        else:
+            user_context = """
+Current user role: admission officer.
+
+You may use only the admission officer's read-only
+admission search and enrollment-summary tools.
+Do not invent admission statuses or claim to enroll
+or modify an applicant.
+"""
+
+
 
     else:
         raise HTTPException(
