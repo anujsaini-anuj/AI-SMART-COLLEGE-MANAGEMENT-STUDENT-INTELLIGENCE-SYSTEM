@@ -9,7 +9,8 @@ from app.database.models import (
     Recommendation,
     Subject,
     Faculty,
-    FacultySubject
+    FacultySubject,
+    Course
 )
 
 from langchain_core.tools import tool
@@ -100,41 +101,142 @@ def _get_subjects_map(
         for subject in subjects
     }
 
+
+
 # ============================================================
-# STUDENT LOOKUP
+# STUDENT LOOKUP - ROLE-BASED ACCESS CONTROL
 # ============================================================
+
 
 def find_student_by_name(
     db: Session,
-    student_name: str
+    student_name: str,
+    current_user
 ):
     """
-    Find a student using student name.
+    Admin:
+        Can search all active students.
 
-    Example:
-    Anuj -> STU001
-    Anuj Kumar -> STU001
+    Faculty:
+        Can search only active students belonging to
+        their department and an assigned subject's
+        course and semester.
+
+    Other roles:
+        Access denied.
     """
 
-    student_name = student_name.strip()
-
-    if not student_name:
+    if not student_name or not student_name.strip():
         return {
             "error": "Student name cannot be empty."
         }
 
-    students = db.query(Student).filter(
-        Student.name.ilike(f"%{student_name}%")
-    ).all()
+    student_name = student_name.strip()
+
+    # Treat SQL LIKE wildcard characters as literal input.
+    escaped_name = (
+        student_name
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+
+    search_pattern = f"%{escaped_name}%"
+
+    # --------------------------------------------------------
+    # ADMIN: COLLEGE-WIDE SEARCH
+    # --------------------------------------------------------
+
+    if current_user.role == "admin":
+
+        students = (
+            db.query(Student)
+            .filter(
+                Student.is_active.is_(True),
+                Student.name.ilike(
+                    search_pattern,
+                    escape="\\"
+                )
+            )
+            .order_by(Student.name.asc())
+            .limit(20)
+            .all()
+        )
+
+    # --------------------------------------------------------
+    # FACULTY: ASSIGNED ACADEMIC SCOPE ONLY
+    # --------------------------------------------------------
+
+    elif current_user.role == "faculty":
+
+        faculty = (
+            db.query(Faculty)
+            .filter(
+                Faculty.user_id == current_user.id
+            )
+            .first()
+        )
+
+        if not faculty:
+            return {
+                "error": "Access denied. Faculty profile not found."
+            }
+
+        students = (
+            db.query(Student)
+            .join(
+                Subject,
+                (Student.course_id == Subject.course_id)
+                & (Student.semester == Subject.semester)
+            )
+            .join(
+                Course,
+                Course.id == Student.course_id
+            )
+            .join(
+                FacultySubject,
+                FacultySubject.subject_id == Subject.id
+            )
+            .filter(
+                FacultySubject.faculty_id == faculty.id,
+                Student.is_active.is_(True),
+                Student.department_id == faculty.department_id,
+                Course.department_id == faculty.department_id,
+                Student.name.ilike(
+                    search_pattern,
+                    escape="\\"
+                )
+            )
+            .distinct()
+            .order_by(Student.name.asc())
+            .limit(20)
+            .all()
+        )
+
+    else:
+        return {
+            "error": "Access denied."
+        }
+
+    # --------------------------------------------------------
+    # HANDLE RESULTS
+    # --------------------------------------------------------
 
     if not students:
         return {
-            "error": "Student not found."
+            "error": (
+                "Student not found in your authorized academic scope."
+                if current_user.role == "faculty"
+                else "Student not found."
+            )
         }
 
     if len(students) > 1:
         return {
-            "error": "Multiple students found.",
+            "error": (
+                "Multiple students found. "
+                "Please provide a more specific name."
+            ),
             "students": [
                 {
                     "student_id": student.student_id,
@@ -150,7 +252,6 @@ def find_student_by_name(
         "student_id": student.student_id,
         "student_name": student.name
     }
-
 
 # ============================================================
 # GET FACULTY ASSIGNED SUBJECT IDS
@@ -252,6 +353,76 @@ def find_subject_by_name(
     }
 
 
+
+
+# ============================================================
+# FACULTY-STUDENT-SUBJECT AUTHORIZATION
+# ============================================================
+def get_faculty_student_subject_ids(
+    db: Session,
+    faculty_user_id: int,
+    student: Student
+) -> list[int]:
+
+    faculty = (
+        db.query(Faculty)
+        .filter(Faculty.user_id == faculty_user_id)
+        .first()
+    )
+
+    if not faculty or not student.is_active:
+        return []
+
+    if faculty.department_id != student.department_id:
+        return []
+
+    rows = (
+        db.query(Subject.id)
+        .join(
+            FacultySubject,
+            FacultySubject.subject_id == Subject.id
+        )
+        .join(
+            Course,
+            Course.id == Subject.course_id
+        )
+        .filter(
+            FacultySubject.faculty_id == faculty.id,
+            Subject.course_id == student.course_id,
+            Subject.semester == student.semester,
+            Course.department_id == faculty.department_id,
+            Course.department_id == student.department_id
+        )
+        .distinct()
+        .all()
+    )
+
+    return [row[0] for row in rows]
+
+def faculty_can_access_student_subject(
+    db: Session,
+    faculty_user_id: int,
+    student_id: str,
+    subject_id: int
+) -> bool:
+    """
+    Verify faculty access to a specific student's subject data.
+    """
+
+    student = _get_student(db, student_id)
+
+    if not student or not student.is_active:
+        return False
+
+    allowed_subject_ids = get_faculty_student_subject_ids(
+        db=db,
+        faculty_user_id=faculty_user_id,
+        student=student
+    )
+
+    return subject_id in allowed_subject_ids
+
+
 # ============================================================
 # CHECK STUDENT SUBJECT
 # ============================================================
@@ -260,32 +431,30 @@ def student_has_subject(
     db: Session,
     student_id: str,
     subject_id: int
-):
-    """
-    Check whether the subject belongs to
-    the student's course.
-    """
+) -> bool:
+    """Check that an active student belongs to the
+    subject's course, semester and department."""
 
-    student_id = student_id.strip()
+    student = _get_student(db, student_id)
+    subject = _get_subject(db, subject_id)
 
-    student = _get_student(
-        db,
-        student_id
-    )
-
-    if not student:
+    if not student or not student.is_active or not subject:
         return False
 
-    subject = _get_subject(
-        db,
-        subject_id
+    course = (
+        db.query(Course)
+        .filter(Course.id == subject.course_id)
+        .first()
     )
 
-    if not subject:
+    if not course:
         return False
 
-    return student.course_id == subject.course_id
-
+    return (
+        student.course_id == subject.course_id
+        and student.semester == subject.semester
+        and student.department_id == course.department_id
+    )
 
 # ============================================================
 # STUDENT PERFORMANCE
@@ -303,9 +472,9 @@ def get_student_performance(
         student_id
     )
 
-    if not student:
+    if not student or not student.is_active:
         return {
-            "message": "Student not found."
+            "message": "Active student not found."
         }
 
     query = db.query(Performance).filter(
@@ -417,16 +586,17 @@ def get_student_attendance(
     subject_id: int | None = None,
     allowed_subject_ids: list[int] | None = None
 ):
-
     student = _get_student(
         db,
         student_id
     )
 
-    if not student:
+    if not student or not student.is_active:
         return {
-            "message": "Student not found."
+            "message": "Active student not found."
         }
+
+        
 
     query = db.query(Attendance).filter(
         Attendance.student_id == student_id
@@ -532,17 +702,17 @@ def get_student_marks(
     subject_id: int | None = None,
     allowed_subject_ids: list[int] | None = None
 ):
-
     student = _get_student(
         db,
         student_id
     )
 
-    if not student:
+    if not student or not student.is_active:
         return {
-            "message": "Student not found."
+            "message": "Active student not found."
         }
 
+    
     query = db.query(Marks).filter(
         Marks.student_id == student_id
     )
@@ -664,11 +834,12 @@ def get_student_risk(
         student_id
     )
 
-    if not student:
+    if not student or not student.is_active:
         return {
-            "message": "Student not found."
+            "message": "Active student not found."
         }
 
+   
     query = db.query(StudentRisk).filter(
         StudentRisk.student_id == student_id
     )
@@ -775,16 +946,16 @@ def get_student_recommendations(
     subject_id: int | None = None,
     allowed_subject_ids: list[int] | None = None
 ):
-
     student = _get_student(
         db,
         student_id
     )
 
-    if not student:
+    if not student or not student.is_active:
         return {
-            "message": "Student not found."
+            "message": "Active student not found."
         }
+
 
     query = db.query(Recommendation).filter(
         Recommendation.student_id == student_id
@@ -894,295 +1065,260 @@ def get_student_recommendations(
 # COLLEGE SUMMARY
 # ============================================================
 
+
 def get_total_students(
     db: Session,
     current_user
 ):
+    """
+    Admin:
+        Count all active students in the college.
 
-    # --------------------------------------------------------
-    # ADMIN CAN SEE ALL STUDENTS
-    # --------------------------------------------------------
+    Faculty:
+        Count active students belonging to courses and
+        semesters where the faculty has assigned subjects.
 
+    The count does not depend on Performance records.
+    """
+
+    # ADMIN: college-wide count
     if current_user.role == "admin":
+        total = (
+            db.query(Student)
+            .filter(Student.is_active.is_(True))
+            .count()
+        )
 
-        total = db.query(Student).count()
+        return {"total_students": total}
 
-        return {
-            "total_students": total
-        }
+    # Only admin and faculty are supported here.
+    if current_user.role != "faculty":
+        return {"error": "Access denied."}
 
-    # --------------------------------------------------------
-    # FACULTY CAN SEE ONLY STUDENTS IN ASSIGNED SUBJECTS
-    # --------------------------------------------------------
-
-    subject_ids = get_faculty_subject_ids(
-        db,
-        current_user.id
+    faculty = (
+        db.query(Faculty)
+        .filter(Faculty.user_id == current_user.id)
+        .first()
     )
 
-    if not subject_ids:
-        return {
-            "total_students": 0
-        }
+    if not faculty:
+        return {"error": "Faculty profile not found."}
 
-    
-    total = db.query(
-        Performance.student_id
-    ).filter(
-        Performance.subject_id.in_(subject_ids)
-    ).distinct().count()
+    # FACULTY: count students in the faculty's
+    # authorized course and semester scope.
+    total = (
+        db.query(Student.id)
+        .join(
+            Subject,
+            (Student.course_id == Subject.course_id)
+            & (Student.semester == Subject.semester)
+        )
+        .join(
+            Course,
+            Course.id == Student.course_id
+        )
+        .join(
+            FacultySubject,
+            FacultySubject.subject_id == Subject.id
+        )
+        .filter(
+            FacultySubject.faculty_id == faculty.id,
+            Student.is_active.is_(True),
+            Student.department_id == faculty.department_id,
+            Student.department_id == Course.department_id,
+            Course.department_id == faculty.department_id
+        )
+        .distinct()
+        .count()
+    )
 
-    return {
-        "total_students": total
-    }
-
+    return {"total_students": total}
 
     
 # ============================================================
 # LOW ATTENDANCE STUDENTS
 # ============================================================
 
+
 def get_low_attendance_students(
     db: Session,
     current_user,
     threshold: float = 75
 ):
-
-    # --------------------------------------------------------
-    # VALIDATE THRESHOLD
-    # --------------------------------------------------------
-
     if threshold < 0 or threshold > 100:
         return {
-            "error":
-                "Threshold must be between 0 and 100."
+            "error": "Threshold must be between 0 and 100."
         }
 
-    # --------------------------------------------------------
-    # ADMIN / FACULTY QUERY
-    # --------------------------------------------------------
-
-    query = db.query(Performance).filter(
-        Performance.attendance_percentage < threshold
+    query = (
+        db.query(Performance)
+        .join(
+            Student,
+            Student.student_id == Performance.student_id
+        )
+        .join(
+            Subject,
+            Subject.id == Performance.subject_id
+        )
+        .join(
+            Course,
+            Course.id == Subject.course_id
+        )
+        .filter(
+            Performance.attendance_percentage < threshold,
+            Student.is_active.is_(True),
+            Student.course_id == Subject.course_id,
+            Student.semester == Subject.semester,
+            Student.department_id == Course.department_id
+        )
     )
 
     if current_user.role == "faculty":
+        faculty = db.query(Faculty).filter(
+            Faculty.user_id == current_user.id
+        ).first()
 
-        subject_ids = get_faculty_subject_ids(
-            db,
-            current_user.id
+        if not faculty:
+            return {"error": "Faculty profile not found."}
+
+        query = query.join(
+            FacultySubject,
+            FacultySubject.subject_id == Subject.id
+        ).filter(
+            FacultySubject.faculty_id == faculty.id,
+            Student.department_id == faculty.department_id,
+            Course.department_id == faculty.department_id
         )
 
-        if not subject_ids:
-            return {
-                "message":
-                    "No subjects assigned to this faculty."
-            }
-
-        query = query.filter(
-            Performance.subject_id.in_(subject_ids)
-        )
+    elif current_user.role != "admin":
+        return {"error": "Access denied."}
 
     performances = query.all()
 
     if not performances:
         return {
-            "message":
-                "No students found with low attendance."
+            "threshold": threshold,
+            "students": []
         }
-
-    # --------------------------------------------------------
-    # BULK LOAD STUDENTS
-    # --------------------------------------------------------
-
-    student_ids = [
-        performance.student_id
-        for performance in performances
-    ]
 
     students_by_id = _get_students_map(
         db,
-        student_ids
+        [p.student_id for p in performances]
     )
-
-    # --------------------------------------------------------
-    # BULK LOAD SUBJECTS
-    # --------------------------------------------------------
-
-    subject_ids = [
-        performance.subject_id
-        for performance in performances
-    ]
 
     subjects_by_id = _get_subjects_map(
         db,
-        subject_ids
+        [p.subject_id for p in performances]
     )
-
-    # --------------------------------------------------------
-    # BUILD RESULT
-    # --------------------------------------------------------
 
     result = []
 
     for performance in performances:
+        student = students_by_id.get(performance.student_id)
+        subject = subjects_by_id.get(performance.subject_id)
 
-        student = students_by_id.get(
-            performance.student_id
-        )
-
-        subject = subjects_by_id.get(
-            performance.subject_id
-        )
-
-        if not student:
+        if not student or not subject:
             continue
 
         result.append({
-            "student_id":
-                student.student_id,
-
-            "student_name":
-                student.name,
-
-            "subject_name":
-                (
-                    subject.name
-                    if subject
-                    else "Unknown"
-                ),
-
-            "attendance_percentage":
-                performance.attendance_percentage
+            "student_id": student.student_id,
+            "student_name": student.name,
+            "subject_name": subject.name,
+            "attendance_percentage": performance.attendance_percentage
         })
 
     return {
-        "threshold":
-            threshold,
-
-        "students":
-            result
+        "threshold": threshold,
+        "students": result
     }
-
 
 
 # ============================================================
 # HIGH RISK STUDENTS
 # ============================================================
 
+
 def get_high_risk_students(
     db: Session,
     current_user
 ):
-
-    # --------------------------------------------------------
-    # ADMIN / FACULTY QUERY
-    # --------------------------------------------------------
-
-    query = db.query(StudentRisk).filter(
-        StudentRisk.risk_level == "High"
+    query = (
+        db.query(StudentRisk)
+        .join(
+            Student,
+            Student.student_id == StudentRisk.student_id
+        )
+        .join(
+            Subject,
+            Subject.id == StudentRisk.subject_id
+        )
+        .join(
+            Course,
+            Course.id == Subject.course_id
+        )
+        .filter(
+            StudentRisk.risk_level == "High",
+            Student.is_active.is_(True),
+            Student.course_id == Subject.course_id,
+            Student.semester == Subject.semester,
+            Student.department_id == Course.department_id
+        )
     )
 
     if current_user.role == "faculty":
+        faculty = db.query(Faculty).filter(
+            Faculty.user_id == current_user.id
+        ).first()
 
-        subject_ids = get_faculty_subject_ids(
-            db,
-            current_user.id
+        if not faculty:
+            return {"error": "Faculty profile not found."}
+
+        query = query.join(
+            FacultySubject,
+            FacultySubject.subject_id == Subject.id
+        ).filter(
+            FacultySubject.faculty_id == faculty.id,
+            Student.department_id == faculty.department_id,
+            Course.department_id == faculty.department_id
         )
 
-        if not subject_ids:
-            return {
-                "message":
-                    "No subjects assigned to this faculty."
-            }
-
-        query = query.filter(
-            StudentRisk.subject_id.in_(subject_ids)
-        )
+    elif current_user.role != "admin":
+        return {"error": "Access denied."}
 
     risk_records = query.all()
 
     if not risk_records:
-        return {
-            "message":
-                "No high-risk students found."
-        }
-
-    # --------------------------------------------------------
-    # BULK LOAD STUDENTS
-    # --------------------------------------------------------
-
-    student_ids = [
-        risk.student_id
-        for risk in risk_records
-    ]
+        return {"students": []}
 
     students_by_id = _get_students_map(
         db,
-        student_ids
+        [r.student_id for r in risk_records]
     )
-
-    # --------------------------------------------------------
-    # BULK LOAD SUBJECTS
-    # --------------------------------------------------------
-
-    subject_ids = [
-        risk.subject_id
-        for risk in risk_records
-    ]
 
     subjects_by_id = _get_subjects_map(
         db,
-        subject_ids
+        [r.subject_id for r in risk_records]
     )
-
-    # --------------------------------------------------------
-    # BUILD RESULT
-    # --------------------------------------------------------
 
     result = []
 
     for risk in risk_records:
+        student = students_by_id.get(risk.student_id)
+        subject = subjects_by_id.get(risk.subject_id)
 
-        student = students_by_id.get(
-            risk.student_id
-        )
-
-        subject = subjects_by_id.get(
-            risk.subject_id
-        )
-
-        if not student:
+        if not student or not subject:
             continue
 
         result.append({
-            "student_id":
-                student.student_id,
-
-            "student_name":
-                student.name,
-
-            "subject_name":
-                (
-                    subject.name
-                    if subject
-                    else "Unknown"
-                ),
-
-            "risk_score":
-                risk.risk_score,
-
-            "risk_level":
-                risk.risk_level,
-
-            "risk_reason":
-                risk.risk_reason
+            "student_id": student.student_id,
+            "student_name": student.name,
+            "subject_name": subject.name,
+            "risk_score": risk.risk_score,
+            "risk_level": risk.risk_level,
+            "risk_reason": risk.risk_reason
         })
 
-    return {
-        "students":
-            result
-    }
+    return {"students": result}
 
 
 
@@ -1190,61 +1326,67 @@ def get_average_attendance(
     db: Session,
     current_user
 ):
+    query = (
+        db.query(Performance)
+        .join(
+            Student,
+            Student.student_id == Performance.student_id
+        )
+        .join(
+            Subject,
+            Subject.id == Performance.subject_id
+        )
+        .join(
+            Course,
+            Course.id == Subject.course_id
+        )
+        .filter(
+            Student.is_active.is_(True),
+            Student.course_id == Subject.course_id,
+            Student.semester == Subject.semester,
+            Student.department_id == Course.department_id
+        )
+    )
 
-    # --------------------------------------------------------
-    # ADMIN
-    # --------------------------------------------------------
+    if current_user.role == "faculty":
+        faculty = db.query(Faculty).filter(
+            Faculty.user_id == current_user.id
+        ).first()
 
-    if current_user.role == "admin":
+        if not faculty:
+            return {"error": "Faculty profile not found."}
 
-        performances = db.query(
-            Performance
-        ).all()
-
-    # --------------------------------------------------------
-    # FACULTY
-    # --------------------------------------------------------
-
-    else:
-
-        subject_ids = get_faculty_subject_ids(
-            db,
-            current_user.id
+        query = query.join(
+            FacultySubject,
+            FacultySubject.subject_id == Subject.id
+        ).filter(
+            FacultySubject.faculty_id == faculty.id,
+            Student.department_id == faculty.department_id,
+            Course.department_id == faculty.department_id
         )
 
-        if not subject_ids:
-            return {
-                "message":
-                    "No subjects assigned to this faculty."
-            }
+    elif current_user.role != "admin":
+        return {"error": "Access denied."}
 
-        performances = db.query(
-            Performance
-        ).filter(
-            Performance.subject_id.in_(subject_ids)
-        ).all()
+    performances = query.all()
 
     if not performances:
         return {
-            "message":
-                "Performance data is not available."
+            "average_attendance_percentage": None,
+            "records_used": 0
         }
 
     total = sum(
-        performance.attendance_percentage
-        for performance in performances
+        float(p.attendance_percentage or 0)
+        for p in performances
     )
 
-    average = total / len(performances)
-
     return {
-        "average_attendance_percentage":
-            round(average, 2),
-
-        "records_used":
-            len(performances)
+        "average_attendance_percentage": round(
+            total / len(performances), 2
+        ),
+        "records_used": len(performances)
     }
-
 
 # ============================================================
 # CREATE AI TOOLS
@@ -1262,7 +1404,8 @@ def create_ai_tools(
     if current_user.role == "student":
 
         student = db.query(Student).filter(
-            Student.user_id == current_user.id
+            Student.user_id == current_user.id,
+            Student.is_active.is_(True)
         ).first()
 
         if not student:
@@ -1363,68 +1506,28 @@ def create_ai_tools(
 
     elif current_user.role in ["faculty", "admin"]:
 
+        
         # ====================================================
-        # STUDENT LOOKUP
+        # STUDENT LOOKUP TOOL
         # ====================================================
 
         @tool
-        def find_student(
-            student_name: str
-        ):
+        def find_student(student_name: str):
             """
-            Find a student using the student's name.
+            Find a student by name.
 
-            Example:
-            Anuj -> STU001
-            Anuj Kumar -> STU001
+            Admin can search all students.
+            Faculty can search only within their
+            authorized department, course and semester.
             """
 
-            student_name = student_name.strip()
+            return find_student_by_name(
+                db=db,
+                student_name=student_name,
+                current_user=current_user
+            )
 
-            if not student_name:
-                return {
-                    "error":
-                        "Student name cannot be empty."
-                }
 
-            students = db.query(Student).filter(
-                Student.name.ilike(
-                    f"%{student_name}%"
-                )
-            ).all()
-
-            if not students:
-                return {
-                    "error":
-                        "Student not found."
-                }
-
-            if len(students) > 1:
-                return {
-                    "error":
-                        "Multiple students found. Please provide the full name or Student ID.",
-
-                    "students": [
-                        {
-                            "student_id":
-                                student.student_id,
-
-                            "student_name":
-                                student.name
-                        }
-                        for student in students
-                    ]
-                }
-
-            student = students[0]
-
-            return {
-                "student_id":
-                    student.student_id,
-
-                "student_name":
-                    student.name
-            }
 
         # ====================================================
         # SUBJECT LOOKUP
@@ -1452,48 +1555,45 @@ def create_ai_tools(
             # ------------------------------------------------
             # FACULTY
             # ------------------------------------------------
-
             if current_user.role == "faculty":
 
-                subject = db.query(Subject).filter(
-                    Subject.name.ilike(subject_name)
+                faculty = db.query(Faculty).filter(
+                    Faculty.user_id == current_user.id
                 ).first()
 
-                if not subject:
-
-                    subject = db.query(Subject).filter(
-                        Subject.code.ilike(subject_name)
-                    ).first()
-
-                if not subject:
+                if not faculty:
                     return {
-                        "error":
-                            "Subject not found."
+                        "error": "Faculty profile not found."
                     }
 
-                allowed = faculty_has_subject_access(
-                    db,
-                    current_user.id,
-                    subject.id
+                subject = (
+                    db.query(Subject)
+                    .join(
+                        FacultySubject,
+                        FacultySubject.subject_id == Subject.id
+                    )
+                    .filter(
+                        FacultySubject.faculty_id == faculty.id,
+                        (
+                            Subject.name.ilike(subject_name)
+                            | Subject.code.ilike(subject_name)
+                        )
+                    )
+                    .first()
                 )
 
-                if not allowed:
+                if not subject:
                     return {
-                        "error":
-                            "Access denied. This subject is not assigned to you."
+                        "error": (
+                            "Subject not found in your assigned subjects."
+                        )
                     }
 
                 return {
-                    "subject_id":
-                        subject.id,
-
-                    "subject_name":
-                        subject.name,
-
-                    "subject_code":
-                        subject.code
+                    "subject_id": subject.id,
+                    "subject_name": subject.name,
+                    "subject_code": subject.code
                 }
-
             # ------------------------------------------------
             # ADMIN
             # ------------------------------------------------
@@ -1611,29 +1711,46 @@ def create_ai_tools(
 
                 if subject_id is not None:
 
-                    allowed = faculty_has_subject_access(
-                        db,
-                        current_user.id,
-                        subject_id
+                    allowed = faculty_can_access_student_subject(
+                        db=db,
+                        faculty_user_id=current_user.id,
+                        student_id=student_id,
+                        subject_id=subject_id
                     )
 
                     if not allowed:
                         return {
-                            "error":
-                                "Access denied. This subject is not assigned to you."
+                            "error": (
+                                "Access denied. You are not authorized "
+                                "to access this student's subject data."
+                            )
                         }
 
                 else:
 
-                    allowed_subject_ids = get_faculty_subject_ids(
+                    student = _get_student(
                         db,
-                        current_user.id
+                        student_id
+                    )
+
+                    if not student or not student.is_active:
+                        return {
+                            "error": "Active student not found."
+                        }
+                  
+
+                    allowed_subject_ids = get_faculty_student_subject_ids(
+                        db=db,
+                        faculty_user_id=current_user.id,
+                        student=student
                     )
 
                     if not allowed_subject_ids:
                         return {
-                            "error":
-                                "No subjects assigned to this faculty."
+                            "error": (
+                                "Access denied. No authorized subjects "
+                                "are available for this student."
+                            )
                         }
 
             # ------------------------------------------------
@@ -1707,29 +1824,44 @@ def create_ai_tools(
 
                 if subject_id is not None:
 
-                    allowed = faculty_has_subject_access(
-                        db,
-                        current_user.id,
-                        subject_id
+                    allowed = faculty_can_access_student_subject(
+                        db=db,
+                        faculty_user_id=current_user.id,
+                        student_id=student_id,
+                        subject_id=subject_id
                     )
 
                     if not allowed:
                         return {
-                            "error":
-                                "Access denied. This subject is not assigned to you."
+                            "error": (
+                                "Access denied. You are not authorized "
+                                "to access this student's subject data."
+                            )
                         }
 
                 else:
-
-                    allowed_subject_ids = get_faculty_subject_ids(
+                    student = _get_student(
                         db,
-                        current_user.id
+                        student_id
+                    )
+
+                    if not student or not student.is_active:
+                        return {
+                            "error": "Active student not found."
+                        }
+
+                    allowed_subject_ids = get_faculty_student_subject_ids(
+                        db=db,
+                        faculty_user_id=current_user.id,
+                        student=student
                     )
 
                     if not allowed_subject_ids:
                         return {
-                            "error":
-                                "No subjects assigned to this faculty."
+                            "error": (
+                                "Access denied. No authorized subjects "
+                                "are available for this student."
+                            )
                         }
 
             # ------------------------------------------------
@@ -1850,29 +1982,45 @@ def create_ai_tools(
 
                 if subject_id is not None:
 
-                    allowed = faculty_has_subject_access(
-                        db,
-                        current_user.id,
-                        subject_id
+                    allowed = faculty_can_access_student_subject(
+                        db=db,
+                        faculty_user_id=current_user.id,
+                        student_id=student_id,
+                        subject_id=subject_id
                     )
 
                     if not allowed:
                         return {
-                            "error":
-                                "Access denied. This subject is not assigned to you."
+                            "error": (
+                                "Access denied. You are not authorized "
+                                "to access this student's subject data."
+                            )
                         }
 
                 else:
 
-                    allowed_subject_ids = get_faculty_subject_ids(
+                    student = _get_student(
                         db,
-                        current_user.id
+                        student_id
+                    )
+
+                    if not student or not student.is_active:
+                        return {
+                            "error": "Active student not found."
+                        }
+                                        
+                    allowed_subject_ids = get_faculty_student_subject_ids(
+                        db=db,
+                        faculty_user_id=current_user.id,
+                        student=student
                     )
 
                     if not allowed_subject_ids:
                         return {
-                            "error":
-                                "No subjects assigned to this faculty."
+                            "error": (
+                                "Access denied. No authorized subjects "
+                                "are available for this student."
+                            )
                         }
 
             # ------------------------------------------------
@@ -1944,31 +2092,47 @@ def create_ai_tools(
 
             if current_user.role == "faculty":
 
-                if subject_id is not None:
 
-                    allowed = faculty_has_subject_access(
-                        db,
-                        current_user.id,
-                        subject_id
+                if subject_id is not None:
+                    allowed = faculty_can_access_student_subject(
+                        db=db,
+                        faculty_user_id=current_user.id,
+                        student_id=student_id,
+                        subject_id=subject_id
                     )
 
                     if not allowed:
                         return {
-                            "error":
-                                "Access denied. This subject is not assigned to you."
+                            "error": (
+                                "Access denied. You are not authorized "
+                                "to access this student's subject data."
+                            )
                         }
 
+               
                 else:
-
-                    allowed_subject_ids = get_faculty_subject_ids(
+                    student = _get_student(
                         db,
-                        current_user.id
+                        student_id
+                    )
+
+                    if not student or not student.is_active:
+                        return {
+                            "error": "Active student not found."
+                        }
+
+                    allowed_subject_ids = get_faculty_student_subject_ids(
+                        db=db,
+                        faculty_user_id=current_user.id,
+                        student=student
                     )
 
                     if not allowed_subject_ids:
                         return {
-                            "error":
-                                "No subjects assigned to this faculty."
+                            "error": (
+                                "Access denied. No authorized subjects "
+                                "are available for this student."
+                            )
                         }
 
             # ------------------------------------------------
@@ -2042,29 +2206,44 @@ def create_ai_tools(
 
                 if subject_id is not None:
 
-                    allowed = faculty_has_subject_access(
-                        db,
-                        current_user.id,
-                        subject_id
+                    allowed = faculty_can_access_student_subject(
+                        db=db,
+                        faculty_user_id=current_user.id,
+                        student_id=student_id,
+                        subject_id=subject_id
                     )
 
                     if not allowed:
                         return {
-                            "error":
-                                "Access denied. This subject is not assigned to you."
+                            "error": (
+                                "Access denied. You are not authorized "
+                                "to access this student's subject data."
+                            )
                         }
 
                 else:
-
-                    allowed_subject_ids = get_faculty_subject_ids(
+                    student = _get_student(
                         db,
-                        current_user.id
+                        student_id
+                    )
+
+                    if not student or not student.is_active:
+                        return {
+                            "error": "Active student not found."
+                        }
+
+                    allowed_subject_ids = get_faculty_student_subject_ids(
+                        db=db,
+                        faculty_user_id=current_user.id,
+                        student=student
                     )
 
                     if not allowed_subject_ids:
                         return {
-                            "error":
-                                "No subjects assigned to this faculty."
+                            "error": (
+                                "Access denied. No authorized subjects "
+                                "are available for this student."
+                            )
                         }
 
             # ------------------------------------------------
