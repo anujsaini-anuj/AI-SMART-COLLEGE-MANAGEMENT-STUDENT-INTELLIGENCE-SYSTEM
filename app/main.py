@@ -30,6 +30,7 @@ from app.services.ml_scheduler import (
     start_ml_scheduler,
     stop_ml_scheduler
 )
+from app.utils.auth import validate_auth_config
 
 Base.metadata.create_all(bind=engine)
 
@@ -39,10 +40,13 @@ app = FastAPI(
     version="1.0.0"
 )
 
-
 @app.on_event("startup")
 def startup_event():
 
+    # Fail startup if JWT configuration is insecure.
+    validate_auth_config()
+
+    # Start background jobs only after validation.
     start_ml_scheduler()
 
 

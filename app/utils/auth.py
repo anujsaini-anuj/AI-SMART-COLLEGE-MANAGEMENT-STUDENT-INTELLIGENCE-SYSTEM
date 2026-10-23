@@ -19,15 +19,66 @@ from app.database.database import get_db
 from app.database.models import User, HOD
 
 
+
 load_dotenv()
 
+SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
+ALGORITHM = os.getenv("ALGORITHM", "HS256").strip()
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM", "HS256")
+try:
+    ACCESS_TOKEN_EXPIRE_MINUTES = int(
+        os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
+    )
+except ValueError as exc:
+    raise RuntimeError(
+        "ACCESS_TOKEN_EXPIRE_MINUTES must be a valid integer."
+    ) from exc
 
-ACCESS_TOKEN_EXPIRE_MINUTES = int(
-    os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
-)
+
+def validate_auth_config():
+    """
+    Validate JWT configuration before the application starts.
+    Never print or log the actual secret key.
+    """
+
+    if not SECRET_KEY:
+        raise RuntimeError(
+            "SECRET_KEY is missing. "
+            "Set a strong SECRET_KEY in your .env file."
+        )
+
+    if len(SECRET_KEY) < 32:
+        raise RuntimeError(
+            "SECRET_KEY is too weak. "
+            "Use a randomly generated secret of at least 32 characters."
+        )
+
+    weak_secrets = {
+        "secret",
+        "secret_key",
+        "your_secret_key",
+        "change_me",
+        "changeme",
+        "password",
+        "12345678901234567890123456789012",
+    }
+
+    if SECRET_KEY.lower() in weak_secrets:
+        raise RuntimeError(
+            "SECRET_KEY uses an insecure default value. "
+            "Generate a new random secret."
+        )
+
+    if ALGORITHM != "HS256":
+        raise RuntimeError(
+            "Unsupported JWT algorithm. "
+            "This application requires HS256."
+        )
+
+    if ACCESS_TOKEN_EXPIRE_MINUTES <= 0:
+        raise RuntimeError(
+            "ACCESS_TOKEN_EXPIRE_MINUTES must be greater than zero."
+        )
 
 
 security = HTTPBearer()
