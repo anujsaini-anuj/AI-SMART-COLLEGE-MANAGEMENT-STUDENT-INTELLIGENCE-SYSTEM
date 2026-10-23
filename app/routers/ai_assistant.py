@@ -89,16 +89,45 @@ def classify_question(question: str) -> str:
         r"policy|policies|rules?|regulations?|procedures?|"
         r"eligib\w*|requirements?|minimum|maximum|"
         r"late fee|fine|borrowing period|"
-        r"exam|examination|"
-        r"condonation|exemption"
+        r"exam|examination|condonation|exemption"
         r")\b"
         r"|attendance.{0,40}"
         r"(required|minimum|eligib\w*|exam|below|less than|under|kam|75)"
         r"|attendance.{0,40}(?:75\s*%)"
         r"|(?:below|less than|under|kam)\s*75\s*%?"
-        r"|(?:75\s*%).{0,40}(exam|eligib\w*)",
+        r"|(?:75\s*%).{0,40}(exam|eligib\w*)"
+        # Library borrowing-period questions
+        r"|(?:library|books?).{0,80}"
+        r"(?:borrow|borrowing|issue|loan).{0,60}"
+        r"(?:period|duration|kitne din|how long)"
+        r"|(?:period|duration|kitne din|how long).{0,80}"
+        r"(?:library|books?|borrow|borrowing|issue|loan)",
         re.IGNORECASE,
     )
+
+        
+    library_borrowing_limit_pattern = re.compile(
+        r"\b("
+        r"library|libraries|book|books|borrow|borrowing|loan|loans"
+        r")\b.{0,100}\b("
+        r"kitni|kitne|how many|maximum|max|limit|"
+        r"allowed|allow|can i|can we|"
+        r"borrow kar sakta|borrow kar skta|"
+        r"le sakta|le skta"
+        r")\b"
+        r"|"
+        r"\b("
+        r"kitni|kitne|how many|maximum|max|limit"
+        r")\b.{0,100}\b("
+        r"library|books?|borrow|loans?"
+        r")\b",
+        re.IGNORECASE,
+    )
+
+    has_library_borrowing_limit_intent = bool(
+        library_borrowing_limit_pattern.search(question)
+    )
+
 
     # STEP 3: Live database questions
     live_data_pattern = re.compile(
@@ -122,6 +151,9 @@ def classify_question(question: str) -> str:
         r")\b",
         re.IGNORECASE,
     )
+
+    if has_library_borrowing_limit_intent:
+        return "policy_only"
 
     has_policy_intent = bool(
         policy_pattern.search(question)
