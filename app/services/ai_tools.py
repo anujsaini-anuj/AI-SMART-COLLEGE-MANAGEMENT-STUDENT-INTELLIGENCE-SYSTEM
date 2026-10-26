@@ -1,5 +1,7 @@
 from sqlalchemy.orm import Session
 
+from datetime import date, datetime
+
 from app.database.models import (
     Student,
     Performance,
@@ -2299,6 +2301,113 @@ def create_ai_tools(
                 allowed_subject_ids
             )
 
+
+        # ====================================================
+        # ADMIN: STUDENT LIBRARY LOANS
+        # ====================================================
+
+        @tool
+        def student_library_loans(student_id: str):
+            """
+            Get the currently issued and overdue books
+            for a student.
+
+            Admin can view library loan records for any
+            active student. This tool is read-only.
+            """
+
+            student_id = student_id.strip()
+
+            if not student_id:
+                return {
+                    "error": "Student ID cannot be empty."
+                }
+
+            # Find the active student
+            student = db.query(Student).filter(
+                Student.student_id == student_id,
+                Student.is_active.is_(True)
+            ).first()
+
+            if not student:
+                return {
+                    "error": "Active student not found."
+                }
+
+            # Fetch currently issued books
+            rows = (
+                db.query(BookIssue, BookCopy, Book)
+                .join(
+                    BookCopy,
+                    BookCopy.id == BookIssue.book_copy_id
+                )
+                .join(
+                    Book,
+                    Book.id == BookCopy.book_id
+                )
+                .filter(
+                    BookIssue.student_id == student_id,
+                    BookIssue.status == "issued"
+                )
+                .order_by(BookIssue.due_date.asc())
+                .limit(50)
+                .all()
+            )
+
+            today = date.today()
+            issued_books = []
+            overdue_books = []
+
+            for issue, copy, book in rows:
+
+                due_date = issue.due_date
+
+                # Handle both DATE and DATETIME database columns
+                if isinstance(due_date, datetime):
+                    due_date = due_date.date()
+
+                book_record = {
+                    "issue_id": issue.id,
+                    "title": book.title,
+                    "accession_number": copy.accession_number,
+                    "issue_date": (
+                        str(issue.issue_date)
+                        if issue.issue_date
+                        else None
+                    ),
+                    "due_date": (
+                        str(issue.due_date)
+                        if issue.due_date
+                        else None
+                    ),
+                    "fine_amount": float(
+                        issue.fine_amount or 0
+                    ),
+                    "overdue": (
+                        due_date < today
+                        if due_date is not None
+                        else False
+                    )
+                }
+
+                issued_books.append(book_record)
+
+                if (
+                    due_date is not None
+                    and due_date < today
+                ):
+                    overdue_books.append(book_record)
+
+            return {
+                "student_id": student.student_id,
+                "student_name": student.name,
+                "total_issued_books": len(issued_books),
+                "total_overdue_books": len(overdue_books),
+                "issued_books": issued_books,
+                "overdue_books": overdue_books,
+                "checked_on": str(today)
+            }
+
         # ====================================================
         # RETURN TOOLS
         # ====================================================
@@ -2314,7 +2423,8 @@ def create_ai_tools(
             student_attendance,
             student_marks,
             student_risk,
-            student_recommendations
+            student_recommendations,
+            student_library_loans
         ]
 
 
