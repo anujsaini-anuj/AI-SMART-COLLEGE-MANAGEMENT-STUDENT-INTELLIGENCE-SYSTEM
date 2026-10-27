@@ -964,6 +964,82 @@ def _table_exists():
         raw.close()
 
 
+
+def get_indexed_document_stats():
+    """
+    Return the number of indexed chunks for each source.
+
+    Example:
+    {
+        "app/Document/uploads/college_rules.pdf": 14,
+        "app/Document/uploads/notice.docx": 3
+    }
+    """
+
+    if not _table_exists():
+        return {}
+
+    raw = _raw_connection()
+
+    try:
+        with raw.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT source, COUNT(*)
+                FROM {VECTOR_TABLE}
+                GROUP BY source
+                ORDER BY source
+                """
+            )
+
+            rows = cursor.fetchall()
+
+        return {
+            source: int(chunk_count)
+            for source, chunk_count in rows
+        }
+
+    finally:
+        raw.close()
+
+
+def delete_indexed_document_source(source: str) -> int:
+    """
+    Delete chunks belonging to exactly one document source.
+
+    This does not call Gemini and does not affect other
+    documents in the vector table.
+    """
+
+    if not _table_exists():
+        return 0
+
+    raw = _raw_connection()
+
+    try:
+        with raw.cursor() as cursor:
+            cursor.execute(
+                f"""
+                DELETE FROM {VECTOR_TABLE}
+                WHERE source = %s
+                """,
+                (source,),
+            )
+
+            deleted_chunks = max(cursor.rowcount, 0)
+
+        raw.commit()
+
+        return deleted_chunks
+
+    except Exception:
+        raw.rollback()
+        raise
+
+    finally:
+        raw.close()
+
+
 # ============================================================
 # DOCUMENT HASHING
 # ============================================================
