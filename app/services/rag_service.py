@@ -21,7 +21,104 @@ import zipfile
 
 import fitz  # PyMuPDF
 
+from redis import Redis
+
 load_dotenv()
+
+
+# ============================================================
+# REDIS CACHE
+# ============================================================
+
+REDIS_URL = os.getenv(
+    "REDIS_URL",
+    "redis://localhost:6379/0",
+)
+
+RAG_CACHE_TTL_SECONDS = 300
+RAG_CACHE_PREFIX = "rag:retrieval:v1:"
+
+# One shared Redis client; redis-py manages its connection pool.
+redis_client = Redis.from_url(
+    REDIS_URL,
+    decode_responses=True,
+    socket_connect_timeout=1,
+    socket_timeout=1,
+)
+
+
+def _rag_cache_key(question, top_k):
+    normalized_question = " ".join(
+        question.strip().lower().split()
+    )
+
+    key_data = (
+        f"{INDEXER_VERSION}|"
+        f"{EMBEDDING_MODEL}|"
+        f"{EMBEDDING_DIMENSIONS}|"
+        f"{CHUNK_SIZE}|"
+        f"{CHUNK_OVERLAP}|"
+        f"{MIN_RELEVANCE_SCORE}|"
+        f"{top_k}|"
+        f"{normalized_question}"
+    )
+
+    digest = hashlib.sha256(
+        key_data.encode("utf-8")
+    ).hexdigest()
+
+    return f"{RAG_CACHE_PREFIX}{digest}"
+
+
+def _get_rag_cache(key):
+    try:
+        cached_value = redis_client.get(key)
+
+        if cached_value is not None:
+            return json.loads(cached_value)
+
+    except Exception:
+        # Redis failure must not break RAG.
+        pass
+
+    return None
+
+
+def _set_rag_cache(key, result):
+    try:
+        redis_client.setex(
+            key,
+            RAG_CACHE_TTL_SECONDS,
+            json.dumps(result, ensure_ascii=False),
+        )
+
+    except Exception:
+        # Continue without caching if Redis is unavailable.
+        pass
+
+
+def _invalidate_rag_cache():
+    try:
+        # Delete matching keys in batches instead of loading
+        # every cache key into memory at once.
+        batch = []
+
+        for key in redis_client.scan_iter(
+            match=f"{RAG_CACHE_PREFIX}*",
+            count=200,
+        ):
+            batch.append(key)
+
+            if len(batch) >= 200:
+                redis_client.delete(*batch)
+                batch.clear()
+
+        if batch:
+            redis_client.delete(*batch)
+
+    except Exception:
+        # Old entries expire after their TTL.
+        pass
 
 
 # ============================================================
@@ -1030,6 +1127,9 @@ def delete_indexed_document_source(source: str) -> int:
 
         raw.commit()
 
+        # Redis cache clear after successful document deletion
+        _invalidate_rag_cache()
+
         return deleted_chunks
 
     except Exception:
@@ -1392,34 +1492,25 @@ def build_rag_index():
     finally:
         raw.close()
 
-    # Step 9: Return indexing statistics.
+
+    # Step 9: Invalidate cached retrieval results only
+    # after the PostgreSQL transaction succeeds.
+    if changed_documents or deleted_sources:
+        _invalidate_rag_cache()
+
+    # Step 10: Return indexing statistics.
     return {
         "documents_loaded": len(documents),
-
-        "documents_added_or_updated": len(
-            changed_documents
-        ),
-
-        "documents_unchanged": len(
-            unchanged_sources
-        ),
-
-        "documents_deleted": len(
-            deleted_sources
-        ),
-
-        "chunks_embedded_this_run": len(
-            records_to_insert
-        ),
-
+        "documents_added_or_updated": len(changed_documents),
+        "documents_unchanged": len(unchanged_sources),
+        "documents_deleted": len(deleted_sources),
+        "chunks_embedded_this_run": len(records_to_insert),
         "chunks_indexed_total": total_chunks,
-
         "storage": "PostgreSQL + pgvector",
-
         "table": VECTOR_TABLE,
-
         "sources": sorted(current_sources),
     }
+
 
 
 # ============================================================
@@ -1454,6 +1545,25 @@ def retrieve_context_with_sources(
             "context": "",
             "sources": []
         }
+
+
+
+    question = question.strip()
+    top_k = max(1, int(top_k))
+
+    cache_key = _rag_cache_key(
+        question,
+        top_k,
+    )
+
+    cached_result = _get_rag_cache(cache_key)
+
+    if cached_result is not None:
+        print("REDIS CACHE HIT")
+        return cached_result
+
+    print("REDIS CACHE MISS")
+
 
     client = get_client()
 
@@ -1525,10 +1635,14 @@ def retrieve_context_with_sources(
 
     # Step 2: No relevant context found.
     if not selected:
-        return {
+        result = {
             "context": "",
-            "sources": []
+            "sources": [],
         }
+
+        _set_rag_cache(cache_key, result)
+        return result
+    
 
     # Step 3: Build context and source citations.
     context_sections = []
@@ -1556,12 +1670,16 @@ def retrieve_context_with_sources(
             "excerpt": item["text"][:300],
         })
 
-    return {
-        "context": "\n\n---\n\n".join(
-            context_sections
-        ),
+
+    result = {
+        "context": "\n\n---\n\n".join(context_sections),
         "sources": sources,
     }
+
+    _set_rag_cache(cache_key, result)
+    return result
+
+
 
 
 # ============================================================
