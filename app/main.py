@@ -23,6 +23,7 @@ from app.routers.risk import router as risk_router
 from app.routers.prediction import router as prediction_router
 from app.routers.segmentation import router as segmentation_router
 from app.routers.recommendation import router as recommendation_router
+from app.routers.rag_documents import router as rag_documents_router
 from app.routers.ai_assistant import router as ai_assistant_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers import intelligence
@@ -83,6 +84,7 @@ app.include_router(risk_router)
 app.include_router(prediction_router)
 app.include_router(segmentation_router)
 app.include_router(recommendation_router)
+app.include_router(rag_documents_router)
 app.include_router(ai_assistant_router)
 app.include_router(dashboard_router)
 app.include_router(
