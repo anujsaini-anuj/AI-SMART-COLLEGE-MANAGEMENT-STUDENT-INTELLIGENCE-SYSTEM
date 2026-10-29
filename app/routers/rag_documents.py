@@ -1,11 +1,9 @@
 import logging
-import threading
 import uuid
 from pathlib import Path
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     File,
     HTTPException,
@@ -13,16 +11,22 @@ from fastapi import (
     UploadFile,
     status,
 )
-from sqlalchemy import text
-from starlette.concurrency import run_in_threadpool
+from rq import Callback
 
-from app.database.database import engine
 from app.utils.auth import require_admin
 from app.services.rag_service import (
     DOCUMENT_DIR,
     SUPPORTED_EXTENSIONS,
-    build_rag_index,
-    delete_indexed_document_source,
+)
+from app.services.rag_queue import (
+    rag_queue,
+    get_retry_policy,
+)
+from app.services.rag_jobs import (
+    create_job,
+    get_job,
+    update_job,
+    mark_rag_job_failed,
 )
 
 router = APIRouter(
@@ -32,191 +36,77 @@ router = APIRouter(
 
 logger = logging.getLogger(__name__)
 
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
-
-# Ek process ke andar ek samay par sirf ek indexing operation.
-# Upload, manual reindex aur deletion ek doosre se conflict nahi karenge.
-INDEX_LOCK = threading.Lock()
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 
-# ============================================================
-# INDEXING JOB STATUS TABLE
-# ============================================================
-
-def _ensure_job_table():
-    """PostgreSQL mein indexing jobs ka status store karo."""
-
-    with engine.begin() as connection:
-        connection.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS rag_document_jobs (
-                    job_id VARCHAR(36) PRIMARY KEY,
-                    source TEXT NOT NULL,
-                    job_status VARCHAR(20) NOT NULL,
-                    message TEXT,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-                """
-            )
-        )
-
-
-def _create_job(job_id: str, source: str):
-    _ensure_job_table()
-
-    with engine.begin() as connection:
-        connection.execute(
-            text(
-                """
-                INSERT INTO rag_document_jobs
-                    (job_id, source, job_status, message)
-                VALUES
-                    (:job_id, :source, 'processing', :message)
-                """
-            ),
-            {
-                "job_id": job_id,
-                "source": source,
-                "message": "Document upload ho gaya hai. Indexing pending hai.",
-            },
-        )
-
-
-def _update_job(
-    job_id: str,
-    job_status: str,
-    message: str,
-):
-    _ensure_job_table()
-
-    with engine.begin() as connection:
-        connection.execute(
-            text(
-                """
-                UPDATE rag_document_jobs
-                SET job_status = :job_status,
-                    message = :message,
-                    updated_at = NOW()
-                WHERE job_id = :job_id
-                """
-            ),
-            {
-                "job_id": job_id,
-                "job_status": job_status,
-                "message": message,
-            },
-        )
-
-
-def _get_job(job_id: str):
-    _ensure_job_table()
-
-    with engine.begin() as connection:
-        result = connection.execute(
-            text(
-                """
-                SELECT
-                    job_id,
-                    source,
-                    job_status,
-                    message,
-                    created_at,
-                    updated_at
-                FROM rag_document_jobs
-                WHERE job_id = :job_id
-                """
-            ),
-            {"job_id": job_id},
-        ).mappings().first()
-
-        return dict(result) if result else None
-
-
-# ============================================================
-# SAFE INDEXING
-# ============================================================
-
-def _run_indexing():
-    """Indexing operations ko ek-ek karke execute karo."""
-
-    with INDEX_LOCK:
-        return build_rag_index()
-
-
-def _process_uploaded_document(
+def _submit_job(
     job_id: str,
     source: str,
+    task_path: str,
+    *task_args,
 ):
-    """
-    FastAPI BackgroundTasks is function ko response bhejne ke baad
-    execute karega. Function khud indexing status update karta hai.
-    """
+    """PostgreSQL mein job record banao aur Redis queue mein bhejo."""
 
     try:
-        logger.info("Background RAG indexing started: %s", source)
+        create_job(job_id, source)
 
-        index_result = _run_indexing()
+    except Exception as exc:
+        logger.exception("Could not create RAG job record.")
 
-        indexed_sources = set(index_result.get("sources", []))
+        raise HTTPException(
+            status_code=500,
+            detail="Could not create the indexing job record.",
+        ) from exc
 
-        # Sirf function return hone ko success na maano.
-        # Confirm karo ki uploaded source index mein aa gaya hai.
-        if source not in indexed_sources:
-            _update_job(
-                job_id,
-                "failed",
-                (
-                    "Indexing complete hui, lekin uploaded document "
-                    "indexed sources mein nahi mila. Server logs aur "
-                    "document extraction report check karo."
-                ),
-            )
-            logger.error(
-                "Uploaded source was not indexed: %s",
-                source,
-            )
-            return
-
-        _update_job(
+    try:
+        rag_queue.enqueue(
+            task_path,
             job_id,
-            "indexed",
-            "Document successfully indexed. Ab RAG mein searchable hai.",
+            *task_args,
+            job_id=job_id,
+            job_timeout=7200,
+            retry=get_retry_policy(),
+            on_failure=Callback(
+                mark_rag_job_failed,
+                timeout=30,
+            ),
+            result_ttl=86400,
+            failure_ttl=604800,
         )
 
-        logger.info("Background RAG indexing completed: %s", source)
-
-    except Exception:
-        logger.exception(
-            "Background RAG indexing failed: %s",
-            source,
-        )
+    except Exception as exc:
+        logger.exception("Could not enqueue RAG job %s.", job_id)
 
         try:
-            _update_job(
+            update_job(
                 job_id,
                 "failed",
                 (
-                    "Indexing fail hui. Server logs check karo aur "
-                    "POST /rag-documents/reindex se retry kar sakte ho."
+                    "Redis queue mein job submit nahi hui. "
+                    "Redis aur RQ worker configuration check karo."
                 ),
             )
         except Exception:
-            logger.exception(
-                "Could not save failed indexing status for job %s",
-                job_id,
-            )
+            logger.exception("Could not update failed job status.")
 
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Document file save ho sakti hai, lekin indexing job "
+                "queue nahi hui. Redis connection check karke retry karo."
+            ),
+        ) from exc
 
-# ============================================================
-# SAFE DOCUMENT PATH
-# ============================================================
+    return {
+        "job_id": job_id,
+        "indexing_status": "queued",
+        "status_url": f"/rag-documents/status/{job_id}",
+    }
+
 
 def _safe_document_path(source: str) -> Path:
     root = DOCUMENT_DIR.resolve()
     project_root = root.parent.parent.resolve()
-
     supplied = Path(source)
 
     if supplied.is_absolute():
@@ -232,7 +122,7 @@ def _safe_document_path(source: str) -> Path:
     except ValueError:
         raise HTTPException(
             status_code=400,
-            detail="The path must point inside app/Document.",
+            detail="Path must remain inside app/Document.",
         )
 
     if candidate == root:
@@ -245,7 +135,7 @@ def _safe_document_path(source: str) -> Path:
 
 
 # ============================================================
-# UPLOAD DOCUMENT - ASYNCHRONOUS INDEXING
+# UPLOAD
 # ============================================================
 
 @router.post(
@@ -253,18 +143,12 @@ def _safe_document_path(source: str) -> Path:
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def upload_document(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user=Depends(require_admin),
 ):
-    """
-    File save karo, processing status create karo aur indexing
-    ko background mein start karo.
-    """
+    DOCUMENT_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
-        DOCUMENT_DIR.mkdir(parents=True, exist_ok=True)
-
         filename = Path(file.filename or "").name.strip()
 
         if not filename or filename in {".", ".."}:
@@ -296,37 +180,31 @@ async def upload_document(
                 detail="Invalid filename.",
             )
 
-        if destination.exists():
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"'{filename}' already exists in app/Document. "
-                    "Use a different filename."
-                ),
-            )
-
         content = await file.read(MAX_UPLOAD_BYTES + 1)
 
         if not content:
             raise HTTPException(
                 status_code=400,
-                detail="The uploaded file is empty.",
+                detail="Uploaded file is empty.",
             )
 
         if len(content) > MAX_UPLOAD_BYTES:
             raise HTTPException(
                 status_code=413,
-                detail="The file exceeds the 20 MB limit.",
+                detail="File exceeds the 20 MB limit.",
             )
 
-        # Exclusive creation prevents accidental overwriting.
+        # Existing file ko overwrite mat karo.
         try:
             with destination.open("xb") as output:
                 output.write(content)
         except FileExistsError:
             raise HTTPException(
                 status_code=409,
-                detail="A file with this name already exists.",
+                detail=(
+                    f"'{filename}' already exists. "
+                    "Use a different filename."
+                ),
             )
 
         source = destination.relative_to(
@@ -335,40 +213,19 @@ async def upload_document(
 
         job_id = str(uuid.uuid4())
 
-        try:
-            # Status database mein save hone ke baad hi task schedule karo.
-            _create_job(job_id, source)
-        except Exception as exc:
-            logger.exception(
-                "Could not create indexing job for %s",
-                source,
-            )
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "File save ho gayi, lekin indexing job create "
-                    "nahi hui. Server logs check karo aur reindex endpoint "
-                    "se index synchronize karo."
-                ),
-            ) from exc
-
-        background_tasks.add_task(
-            _process_uploaded_document,
+        job_info = _submit_job(
             job_id,
+            source,
+            "app.services.rag_jobs.process_uploaded_document",
             source,
         )
 
-        # Indexing complete hone ka wait nahi kiya ja raha.
         return {
-            "message": (
-                "Document uploaded. Background indexing started."
-            ),
+            "message": "Document uploaded and queued for indexing.",
             "filename": filename,
             "source": source,
             "size_bytes": len(content),
-            "job_id": job_id,
-            "indexing_status": "processing",
-            "status_url": f"/rag-documents/status/{job_id}",
+            **job_info,
         }
 
     finally:
@@ -376,7 +233,7 @@ async def upload_document(
 
 
 # ============================================================
-# CHECK INDEXING STATUS
+# JOB STATUS
 # ============================================================
 
 @router.get("/status/{job_id}")
@@ -384,9 +241,7 @@ def get_indexing_status(
     job_id: str,
     current_user=Depends(require_admin),
 ):
-    """Job ID se document ki indexing status check karo."""
-
-    job = _get_job(job_id)
+    job = get_job(job_id)
 
     if job is None:
         raise HTTPException(
@@ -424,15 +279,13 @@ async def list_documents(
         except OSError:
             size_bytes = None
 
-        files.append(
-            {
-                "filename": path.name,
-                "source": source,
-                "extension": extension or None,
-                "supported": extension in SUPPORTED_EXTENSIONS,
-                "size_bytes": size_bytes,
-            }
-        )
+        files.append({
+            "filename": path.name,
+            "source": source,
+            "extension": extension or None,
+            "supported": extension in SUPPORTED_EXTENSIONS,
+            "size_bytes": size_bytes,
+        })
 
     return {
         "document_directory": str(DOCUMENT_DIR),
@@ -442,98 +295,43 @@ async def list_documents(
 
 
 # ============================================================
-# MANUAL REINDEX
+# QUEUED FULL REINDEX
 # ============================================================
 
-@router.post("/reindex")
-async def reindex_documents(
+@router.post(
+    "/reindex",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def reindex_documents(
     current_user=Depends(require_admin),
 ):
-    """Saare documents ko PostgreSQL/pgvector ke saath synchronize karo."""
+    job_id = str(uuid.uuid4())
 
-    try:
-        result = await run_in_threadpool(_run_indexing)
+    job_info = _submit_job(
+        job_id,
+        "__ALL_DOCUMENTS__",
+        "app.services.rag_jobs.process_full_reindex",
+    )
 
-        return {
-            "message": "RAG indexing completed.",
-            "index_result": result,
-        }
-
-    except Exception as exc:
-        logger.exception("Manual RAG reindex failed")
-
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "RAG indexing failed. Check the server logs "
-                "and the document scan report."
-            ),
-        ) from exc
+    return {
+        "message": "Full reindex job queued.",
+        **job_info,
+    }
 
 
 # ============================================================
-# DELETE DOCUMENT AND SYNCHRONIZE INDEX
+# QUEUED DOCUMENT DELETE
 # ============================================================
 
-def _delete_document_and_sync(
-    target: Path,
-    source: str,
-    extension: str,
-):
-    """
-    File deletion, chunk deletion aur reindex ko ek lock ke andar
-    rakho taaki upload indexing ke saath race na ho.
-    """
-
-    with INDEX_LOCK:
-        if not target.exists():
-            raise HTTPException(
-                status_code=404,
-                detail="Document not found.",
-            )
-
-        target.unlink()
-
-        deleted_chunks = 0
-
-        if extension in SUPPORTED_EXTENSIONS:
-            deleted_chunks = delete_indexed_document_source(source)
-
-        try:
-            index_result = build_rag_index()
-
-        except Exception:
-            logger.exception(
-                "Reindex failed after deleting %s",
-                source,
-            )
-
-            return {
-                "message": (
-                    "File deleted and its indexed chunks removed "
-                    "where applicable, but full index synchronization "
-                    "failed. Retry POST /rag-documents/reindex."
-                ),
-                "source": source,
-                "deleted_chunks": deleted_chunks,
-                "index_synchronized": False,
-            }
-
-        return {
-            "message": "Document deleted and index synchronized.",
-            "source": source,
-            "deleted_chunks": deleted_chunks,
-            "index_synchronized": True,
-            "index_result": index_result,
-        }
-
-
-@router.delete("/")
-async def delete_document(
+@router.delete(
+    "/",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def delete_document(
     source: str = Query(
         ...,
         description=(
-            "Exact project-relative path, e.g. "
+            "Project-relative path, e.g. "
             "app/Document/college_rules.pdf"
         ),
     ),
@@ -550,31 +348,23 @@ async def delete_document(
     if target.is_symlink() or not target.is_file():
         raise HTTPException(
             status_code=400,
-            detail="The supplied path must identify a regular file.",
+            detail="A regular document file is required.",
         )
 
-    project_relative_source = target.relative_to(
+    project_source = target.relative_to(
         DOCUMENT_DIR.parent.parent.resolve()
     ).as_posix()
 
-    try:
-        return await run_in_threadpool(
-            _delete_document_and_sync,
-            target,
-            project_relative_source,
-            target.suffix.lower(),
-        )
+    job_id = str(uuid.uuid4())
 
-    except HTTPException:
-        raise
+    job_info = _submit_job(
+        job_id,
+        project_source,
+        "app.services.rag_jobs.process_delete_document",
+        project_source,
+    )
 
-    except Exception as exc:
-        logger.exception(
-            "Document deletion failed: %s",
-            project_relative_source,
-        )
-
-        raise HTTPException(
-            status_code=500,
-            detail="Document deletion failed. Check the server logs.",
-        ) from exc
+    return {
+        "message": "Document deletion job queued.",
+        **job_info,
+    }
