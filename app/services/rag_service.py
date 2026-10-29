@@ -1534,18 +1534,12 @@ def retrieve_context_with_sources(
     relevance threshold, return empty context and sources.
     """
 
-    if not _table_exists():
-        return {
-            "context": "",
-            "sources": []
-        }
 
     if not question or not question.strip():
         return {
             "context": "",
             "sources": []
         }
-
 
 
     question = question.strip()
@@ -1563,6 +1557,13 @@ def retrieve_context_with_sources(
         return cached_result
 
     print("REDIS CACHE MISS")
+
+
+    if not _table_exists():
+        return {
+            "context": "",
+            "sources": []
+        }
 
 
     client = get_client()

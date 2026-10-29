@@ -6,7 +6,7 @@ from app.services.rag_queue import (
     redis_connection,
 )
 
-from rq import SimpleWorker
+from rq import SimpleWorker, Worker
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
