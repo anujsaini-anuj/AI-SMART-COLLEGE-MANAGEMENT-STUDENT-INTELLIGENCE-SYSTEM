@@ -16,6 +16,8 @@ from app.database.models import Book, BookCopy, BookIssue, Student, LibraryFine
 from app.utils.auth import require_librarian, require_student, require_accountant
 
 
+MAX_ACTIVE_BOOKS = 3
+
 router = APIRouter(
     prefix="/library",
     tags=["Library Management"]
@@ -287,15 +289,44 @@ def issue_book(
     # Clean official student ID
     student_id = student_id.strip()
 
-    # Find student using college Student ID
-    student = db.query(Student).filter(
-        Student.student_id == student_id
-    ).first()
+    student = (
+        db.query(Student)
+        .filter(Student.student_id == student_id)
+        .with_for_update()
+        .first()
+    )
 
     if not student:
         raise HTTPException(
             status_code=404,
             detail="Student not found"
+        )
+
+
+
+    # Count currently active book issues.
+    active_books_count = (
+        db.query(BookIssue)
+        .filter(
+            BookIssue.student_id == student.student_id,
+            BookIssue.status == "issued"
+        )
+        .count()
+    )
+
+    # Enforce maximum active book limit.
+    if active_books_count >= MAX_ACTIVE_BOOKS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Maximum book borrowing limit reached.",
+                "maximum_allowed_books": MAX_ACTIVE_BOOKS,
+                "currently_issued_books": active_books_count,
+                "remaining_book_limit": 0,
+                "instruction": (
+                    "Please return an issued book before borrowing another."
+                )
+            }
         )
 
     # Check physical book copy
