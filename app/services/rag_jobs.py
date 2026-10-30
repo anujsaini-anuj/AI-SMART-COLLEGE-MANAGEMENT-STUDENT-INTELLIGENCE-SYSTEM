@@ -2,7 +2,6 @@ import logging
 from pathlib import Path
 
 from sqlalchemy import text
-from rq import get_current_job
 
 from app.database.database import engine
 from app.services.rag_queue import redis_connection
@@ -275,6 +274,7 @@ def mark_rag_job_failed(
     job_id = getattr(job, "id", None)
 
     if not job_id:
+        logger.error("Failed RAG job has no job ID.")
         return
 
     try:
@@ -290,35 +290,5 @@ def mark_rag_job_failed(
     except Exception:
         logger.exception(
             "Could not persist final failure for RAG job %s",
-            job_id,
-        )
-
-
-
-
-def mark_rag_job_failed(
-    job,
-    connection,
-    exception_type,
-    exception_value,
-    traceback,
-):
-    """RQ ki final failure par PostgreSQL job status update karo."""
-
-    job_id = getattr(job, "id", None)
-
-    if not job_id:
-        logger.error("Failed RAG job has no job ID.")
-        return
-
-    try:
-        update_job(
-            job_id,
-            "failed",
-            f"RAG job failed: {exception_value}",
-        )
-    except Exception:
-        logger.exception(
-            "Could not mark RAG job as failed: %s",
             job_id,
         )

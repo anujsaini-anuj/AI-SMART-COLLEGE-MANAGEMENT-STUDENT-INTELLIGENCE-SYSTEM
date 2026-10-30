@@ -123,7 +123,7 @@ def main():
     scheduler.add_job(
         enqueue_nightly_reindex,
         trigger="cron",
-        hour=2,
+        hour=0,
         minute=0,
         id="rag_nightly_reindex",
         replace_existing=True,
@@ -134,7 +134,7 @@ def main():
 
     logger.info(
         "RAG scheduler started. "
-        "Nightly indexing is scheduled for 02:00 AM IST."
+        "Nightly indexing is scheduled for 12:00 AM IST."
     )
 
     try:
