@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS rag_document_jobs (
     job_id VARCHAR(36) PRIMARY KEY,
     source TEXT NOT NULL,
     job_status VARCHAR(20) NOT NULL,
+    progress INTEGER NOT NULL DEFAULT 0,
+    stage VARCHAR(50) NOT NULL DEFAULT 'queued',
     message TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -30,20 +32,45 @@ def ensure_job_table():
     with engine.begin() as connection:
         connection.execute(text(JOB_TABLE_SQL))
 
+        # Existing table mein naye columns add honge.
+        connection.execute(text("""
+            ALTER TABLE rag_document_jobs
+            ADD COLUMN IF NOT EXISTS progress INTEGER
+            NOT NULL DEFAULT 0
+        """))
+
+        connection.execute(text("""
+            ALTER TABLE rag_document_jobs
+            ADD COLUMN IF NOT EXISTS stage VARCHAR(50)
+            NOT NULL DEFAULT 'queued'
+        """))
+
 
 def create_job(job_id: str, source: str):
     ensure_job_table()
 
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO rag_document_jobs
-                    (job_id, source, job_status, message)
+                    (
+                        job_id,
+                        source,
+                        job_status,
+                        progress,
+                        stage,
+                        message
+                    )
                 VALUES
-                    (:job_id, :source, 'queued', :message)
-                """
-            ),
+                    (
+                        :job_id,
+                        :source,
+                        'queued',
+                        0,
+                        'queued',
+                        :message
+                    )
+            """),
             {
                 "job_id": job_id,
                 "source": source,
@@ -51,52 +78,56 @@ def create_job(job_id: str, source: str):
             },
         )
 
-
-def update_job(job_id: str, job_status: str, message: str):
-    ensure_job_table()
-
+def update_job(
+    job_id: str,
+    job_status: str,
+    message: str,
+    progress=None,
+    stage=None,
+):
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 UPDATE rag_document_jobs
-                SET job_status = :job_status,
+                SET
+                    job_status = :job_status,
                     message = :message,
+                    progress = COALESCE(:progress, progress),
+                    stage = COALESCE(:stage, stage),
                     updated_at = NOW()
                 WHERE job_id = :job_id
-                """
-            ),
+            """),
             {
                 "job_id": job_id,
                 "job_status": job_status,
                 "message": message,
+                "progress": progress,
+                "stage": stage,
             },
         )
 
 
 def get_job(job_id: str):
-    ensure_job_table()
-
     with engine.begin() as connection:
         result = connection.execute(
-            text(
-                """
+            text("""
                 SELECT
                     job_id,
                     source,
                     job_status,
+                    progress,
+                    stage,
                     message,
                     created_at,
                     updated_at
                 FROM rag_document_jobs
                 WHERE job_id = :job_id
-                """
-            ),
+            """),
             {"job_id": job_id},
         ).mappings().first()
 
         return dict(result) if result else None
-
+    
 def _with_index_lock(operation):
     lock = redis_connection.lock(
         "rag:indexing:lock",
@@ -116,9 +147,12 @@ def _with_index_lock(operation):
             logger.exception("Could not release RAG indexing lock.")
 
 
-def _build_index_with_lock():
-    return _with_index_lock(build_rag_index)
-
+def _build_index_with_lock(progress_callback=None):
+    return _with_index_lock(
+        lambda: build_rag_index(
+            progress_callback=progress_callback
+        )
+    )
 
 def _run_task(job_id: str, operation):
     """
@@ -130,6 +164,8 @@ def _run_task(job_id: str, operation):
         job_id,
         "processing",
         "Background worker document process kar raha hai.",
+        progress=5,
+        stage="starting",
     )
 
     try:
@@ -148,7 +184,9 @@ def _run_task(job_id: str, operation):
                 job_id,
                 "retrying",
                 "Attempt fail hui. Queue retry kar sakti hai.",
+                stage="retrying",
             )
+            
         except Exception:
             logger.exception(
                 "Could not update retry status: %s",
@@ -157,34 +195,59 @@ def _run_task(job_id: str, operation):
 
         raise
 
-
 def process_uploaded_document(job_id: str, source: str):
-    """Uploaded document ko existing incremental indexer se process karo."""
+    """Uploaded document ko progress tracking ke saath index karo."""
 
     def operation():
-        result = _build_index_with_lock()
 
-        indexed_sources = set(result.get("sources", []))
+        def progress_callback(stage, progress, message):
+            update_job(
+                job_id=job_id,
+                job_status="processing",
+                progress=progress,
+                stage=stage,
+                message=message,
+            )
+
+            # RQ Worker terminal mein live progress
+            logger.info(
+                "[RAG INDEXING] Job=%s | Stage=%s | Progress=%s%% | Message=%s",
+                job_id,
+                stage,
+                progress,
+                message,
+            )
+
+            
+
+
+           
+            
+
+        result = _build_index_with_lock(
+            progress_callback=progress_callback
+        )
+
+        indexed_sources = set(
+            result.get("sources", [])
+        )
 
         if source not in indexed_sources:
             raise RuntimeError(
-                f"Uploaded source was not indexed: {source}"
+                f"Uploaded document was not indexed: {source}"
             )
 
         update_job(
-            job_id,
-            "indexed",
-            "Document successfully indexed and searchable hai.",
+            job_id=job_id,
+            job_status="indexed",
+            progress=100,
+            stage="completed",
+            message="Document indexed successfully.",
         )
 
-        return {
-            "job_id": job_id,
-            "source": source,
-            "status": "indexed",
-        }
+        return result
 
     return _run_task(job_id, operation)
-
 
 def process_full_reindex(job_id: str):
     """Saare documents ko PostgreSQL/pgvector ke saath synchronize karo."""
@@ -285,7 +348,9 @@ def mark_rag_job_failed(
                 "Job retries ke baad bhi fail hui: "
                 f"{str(exception_value)[:700]}"
             ),
+            stage="failed",
         )
+        
 
     except Exception:
         logger.exception(

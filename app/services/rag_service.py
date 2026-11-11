@@ -1218,7 +1218,7 @@ def _get_existing_document_hashes():
 # INCREMENTAL RAG INDEXING
 # ============================================================
 
-def build_rag_index():
+def build_rag_index(progress_callback=None):
     """
     Synchronize document chunks with PostgreSQL + pgvector.
 
@@ -1241,9 +1241,25 @@ def build_rag_index():
         Roll back all changes made in this run.
     """
 
+    def report(stage, progress, message):
+        if progress_callback:
+            progress_callback(stage, progress, message)
+
+    report(
+        "extracting",
+        10,
+        "Documents se text extract kiya ja raha hai."
+    )
+
     # Step 1: Read current source documents.
     documents, load_report = load_documents(
         return_report=True
+    )
+
+    report(
+        "extracted",
+        25,
+        f"{len(documents)} documents extract ho gaye."
     )
 
     print("RAG document scan report:")
@@ -1293,6 +1309,17 @@ def build_rag_index():
             prepared_documents.append(
                 (document, chunks)
             )
+
+    total_chunks = sum(
+        len(chunks)
+        for _, chunks in prepared_documents
+    )
+
+    report(
+        "chunking",
+        35,
+        f"Document chunking complete. Total chunks: {total_chunks}"
+    )
 
     current_sources = {
         document["source"]
@@ -1352,10 +1379,7 @@ def build_rag_index():
             ))
 
     # Step 7: Generate embeddings only for changed documents.
-    #
-    # IMPORTANT:
-    # No existing database rows are deleted or modified
-    # during this stage. If Gemini fails, the old index stays.
+
     client = (
         get_client()
         if changed_documents
@@ -1363,6 +1387,20 @@ def build_rag_index():
     )
 
     records_to_insert = []
+
+    total_embedding_chunks = sum(
+        len(chunks)
+        for _, chunks, _ in changed_documents
+    )
+
+    completed_embeddings = 0
+
+    report(
+        "embedding",
+        40,
+        f"Embedding process started. Total chunks: "
+        f"{total_embedding_chunks}"
+    )
 
     for document, chunks, document_hash in changed_documents:
 
@@ -1384,6 +1422,32 @@ def build_rag_index():
                 "embedding": _vector_literal(vector),
                 "document_hash": document_hash,
             })
+
+            completed_embeddings += 1
+
+            if total_embedding_chunks:
+                progress = 40 + int(
+                    45 * completed_embeddings
+                    / total_embedding_chunks
+                )
+            else:
+                progress = 85
+
+            report(
+                "embedding",
+                progress,
+                (
+                    f"Embedding progress: "
+                    f"{completed_embeddings}/"
+                    f"{total_embedding_chunks}"
+                )
+            )
+
+    report(
+        "saving",
+        90,
+        "Embeddings PostgreSQL + pgvector mein save ho rahi hain."
+    )
 
     # Step 8: Apply deletions and replacements in one
     # database transaction.
@@ -1484,6 +1548,12 @@ def build_rag_index():
 
         # Commit only after every change succeeds.
         raw.commit()
+
+        report(
+            "saved",
+            98,
+            "Database indexing successfully save ho gayi."
+        )
 
     except Exception:
         raw.rollback()

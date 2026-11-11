@@ -29,6 +29,13 @@ from app.services.rag_jobs import (
     mark_rag_job_failed,
 )
 
+
+import asyncio
+import json
+
+from fastapi import Request
+from fastapi.responses import StreamingResponse
+
 router = APIRouter(
     prefix="/rag-documents",
     tags=["RAG Documents"],
@@ -180,32 +187,49 @@ async def upload_document(
                 detail="Invalid filename.",
             )
 
-        content = await file.read(MAX_UPLOAD_BYTES + 1)
+        total_size = 0
+        chunk_size = 1024 * 1024
 
-        if not content:
+        try:
+            with destination.open("xb") as output:
+
+                while True:
+                    chunk = await file.read(chunk_size)
+
+                    if not chunk:
+                        break
+
+                    total_size += len(chunk)
+
+                    if total_size > MAX_UPLOAD_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail="File exceeds the 20 MB limit.",
+                        )
+
+                    output.write(chunk)
+
+        except FileExistsError:
+            raise HTTPException(
+                status_code=409,
+                detail=f"'{filename}' already exists.",
+            )
+
+        except HTTPException:
+            if destination.exists():
+                destination.unlink()
+            raise
+
+        if total_size == 0:
+            if destination.exists():
+                destination.unlink()
+
             raise HTTPException(
                 status_code=400,
                 detail="Uploaded file is empty.",
             )
 
-        if len(content) > MAX_UPLOAD_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail="File exceeds the 20 MB limit.",
-            )
-
-        # Existing file ko overwrite mat karo.
-        try:
-            with destination.open("xb") as output:
-                output.write(content)
-        except FileExistsError:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"'{filename}' already exists. "
-                    "Use a different filename."
-                ),
-            )
+       
 
         source = destination.relative_to(
             DOCUMENT_DIR.parent.parent.resolve()
@@ -224,7 +248,7 @@ async def upload_document(
             "message": "Document uploaded and queued for indexing.",
             "filename": filename,
             "source": source,
-            "size_bytes": len(content),
+            "size_bytes": total_size,
             **job_info,
         }
 
@@ -251,6 +275,79 @@ def get_indexing_status(
 
     return job
 
+
+@router.get("/stream/{job_id}")
+async def stream_indexing_status(
+    job_id: str,
+    request: Request,
+    current_user=Depends(require_admin),
+):
+    # Job exist karti hai ya nahi, pehle check karo.
+    job = get_job(job_id)
+
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Indexing job not found.",
+        )
+
+    async def event_generator():
+
+        terminal_statuses = {
+            "indexed",
+            "completed",
+            "failed",
+        }
+
+        last_payload = None
+
+        while True:
+
+            if await request.is_disconnected():
+                break
+
+            # Synchronous database operation ko event loop se alag rakho.
+            current_job = await asyncio.to_thread(
+                get_job,
+                job_id,
+            )
+
+            if current_job is None:
+                break
+
+            payload = {
+                "job_id": current_job["job_id"],
+                "status": current_job["job_status"],
+                "progress": current_job["progress"],
+                "stage": current_job["stage"],
+                "message": current_job["message"],
+            }
+
+            if payload != last_payload:
+                yield (
+                    "event: progress\n"
+                    f"data: {json.dumps(payload, default=str)}\n\n"
+                )
+
+                last_payload = payload
+
+            if current_job["job_status"] in terminal_statuses:
+                break
+
+            # Client connection alive rakhne ke liye heartbeat.
+            yield ": keep-alive\n\n"
+
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 # ============================================================
 # LIST DOCUMENTS
