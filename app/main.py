@@ -32,6 +32,7 @@ from app.services.ml_scheduler import (
     stop_ml_scheduler
 )
 from app.utils.auth import validate_auth_config
+from app.routers.chat import router as chat_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -90,3 +91,4 @@ app.include_router(dashboard_router)
 app.include_router(
     intelligence.router
 )
+app.include_router(chat_router)

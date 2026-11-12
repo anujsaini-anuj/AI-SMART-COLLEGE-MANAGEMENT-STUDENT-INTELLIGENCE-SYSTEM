@@ -2039,3 +2039,191 @@ class StudentMLRecord(Base):
 
     student = relationship("Student")
     subject = relationship("Subject")
+
+
+
+
+
+
+
+# ==================================================
+# CHAT CONVERSATION
+# ==================================================
+
+class ChatConversation(Base):
+
+    __tablename__ = "chat_conversations"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    conversation_type = Column(
+        String(10),
+        nullable=False
+    )  # direct / group
+
+    title = Column(
+        String(150),
+        nullable=True
+    )
+
+    # Direct chat ke liye unique key, jaise direct:2:9
+    # Group chat mein NULL rahegi.
+    direct_key = Column(
+        String(100),
+        unique=True,
+        nullable=True
+    )
+
+    created_by = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+
+# ==================================================
+# CHAT PARTICIPANTS
+# ==================================================
+
+class ChatParticipant(Base):
+
+    __tablename__ = "chat_participants"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id",
+            "user_id",
+            name="uq_chat_conversation_user"
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    conversation_id = Column(
+        Integer,
+        ForeignKey("chat_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
+    joined_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    last_read_at = Column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+
+# ==================================================
+# CHAT MESSAGES
+# ==================================================
+
+class ChatMessage(Base):
+
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    conversation_id = Column(
+        Integer,
+        ForeignKey("chat_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
+    sender_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True
+    )
+
+    content = Column(
+        String(5000),
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True
+    )
+
+    edited_at = Column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    is_deleted = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false"
+    )
+
+
+# ==================================================
+# MESSAGE DELIVERY / READ RECEIPTS
+# ==================================================
+
+class ChatMessageReceipt(Base):
+
+    __tablename__ = "chat_message_receipts"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id",
+            "user_id",
+            name="uq_chat_message_receipt_user"
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    message_id = Column(
+        Integer,
+        ForeignKey("chat_messages.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
+    delivered_at = Column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    read_at = Column(
+        DateTime(timezone=True),
+        nullable=True
+    )
