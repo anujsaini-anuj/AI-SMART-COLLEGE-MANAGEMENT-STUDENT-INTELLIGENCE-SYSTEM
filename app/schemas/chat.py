@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List
+from datetime import datetime
 
 
 class CreateGroupChatRequest(BaseModel):
@@ -18,7 +19,10 @@ class ChatMessageResponse(BaseModel):
     conversation_id: int
     sender_id: int
     content: str
-    created_at: str
+    created_at: datetime
+
+    edited_at: datetime | None = None
+    is_deleted: bool = False
 
 
 class ChatReadRequest(BaseModel):
