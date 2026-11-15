@@ -27,7 +27,8 @@ from app.database.models import (
     ChatConversation,
     ChatParticipant,
     ChatMessage,
-    ChatMessageReceipt
+    ChatMessageReceipt,
+    ChatMessageDeletion
 )
 
 from app.schemas.chat import CreateGroupChatRequest
@@ -531,6 +532,7 @@ def get_my_conversations(
             .all()
         )
 
+       
         unread_count = (
             db.query(func.count(ChatMessageReceipt.id))
             .join(
@@ -541,10 +543,18 @@ def get_my_conversations(
                 ChatMessage.conversation_id == conversation.id,
                 ChatMessage.is_deleted == False,
                 ChatMessageReceipt.user_id == current_user.id,
-                ChatMessageReceipt.read_at.is_(None)
+                ChatMessageReceipt.read_at.is_(None),
+
+                # Exclude messages deleted for me
+                ~ChatMessage.id.in_(
+                    db.query(ChatMessageDeletion.message_id).filter(
+                        ChatMessageDeletion.user_id == current_user.id
+                    )
+                )
             )
             .scalar()
         )
+
 
         result.append({
             "conversation_id": conversation.id,
@@ -585,8 +595,15 @@ def get_chat_messages(
         current_user.id
     )
 
+    hidden_message_ids = db.query(
+        ChatMessageDeletion.message_id
+    ).filter(
+        ChatMessageDeletion.user_id == current_user.id
+    )
+
     query = db.query(ChatMessage).filter(
-        ChatMessage.conversation_id == conversation_id
+        ChatMessage.conversation_id == conversation_id,
+        ~ChatMessage.id.in_(hidden_message_ids)
     )
 
     if before_id:
@@ -959,19 +976,30 @@ async def chat_websocket(
                         continue
 
 
+                    # ======================================
                     # DELETE MESSAGE
-                    if data.get("type") == "delete":
+                    # ======================================
+
+                    if event_type == "delete":
+
                         message_id = data.get("message_id")
+                        delete_type = data.get("delete_type")
 
                         if (
                             not isinstance(message_id, int)
                             or isinstance(message_id, bool)
                             or message_id <= 0
                         ):
-
                             await websocket.send_json({
                                 "type": "error",
                                 "message": "Valid positive message_id is required"
+                            })
+                            continue
+
+                        if delete_type not in ["me", "everyone"]:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": "delete_type must be me or everyone"
                             })
                             continue
 
@@ -981,71 +1009,125 @@ async def chat_websocket(
                         ).with_for_update().first()
 
                         if message is None:
-                            db.rollback()
-
                             await websocket.send_json({
                                 "type": "error",
                                 "message": "Message not found"
                             })
                             continue
 
-                        if message.sender_id != current_user.id:
-                            db.rollback()
+                        # ==================================
+                        # DELETE FOR ME
+                        # ==================================
 
-                            await websocket.send_json({
-                                "type": "error",
-                                "message": "You can only delete your own messages"
-                            })
-                            continue
+                        if delete_type == "me":
 
-                        if message.is_deleted:
-                            db.rollback()
+                            existing = db.query(ChatMessageDeletion).filter(
+                                ChatMessageDeletion.message_id == message_id,
+                                ChatMessageDeletion.user_id == current_user_id
+                            ).first()
 
-                            await websocket.send_json({
-                                "type": "error",
-                                "message": "Message is already deleted"
-                            })
-                            continue
+                            if existing:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "Message already deleted for you"
+                                })
+                                continue
 
-                        # Soft delete
-                        message.is_deleted = True
-                        message.content = "This message was deleted"
+                            try:
 
-                        conversation = db.query(ChatConversation).filter(
-                            ChatConversation.id == conversation_id
-                        ).first()
+                                db.add(
+                                    ChatMessageDeletion(
+                                        message_id=message_id,
+                                        user_id=current_user_id
+                                    )
+                                )
 
-                        if conversation:
-                            conversation.updated_at = datetime.now(timezone.utc)
+                                db.commit()
 
-                        try:
-                            db.commit()
+                            except Exception:
 
-                        except Exception:
-                            db.rollback()
-                            logger.exception("Message delete failed")
+                                db.rollback()
+                                logger.exception("Delete for me failed")
 
-                            await websocket.send_json({
-                                "type": "error",
-                                "message": "Unable to delete message"
-                            })
-                            continue
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "Unable to delete message"
+                                })
+                                continue
 
-                        event = {
-                            "type": "message_deleted",
-                            "message_id": message.id,
-                            "conversation_id": conversation_id,
-                            "deleted_by": current_user.id,
-                            "content": message.content,
-                            "is_deleted": True
-                        }
+                            # Notify all devices of the same user
+                            await chat_manager.send_to_user(
+                                current_user_id,
+                                conversation_id,
+                                {
+                                    "type": "message_deleted_for_me",
+                                    "message_id": message_id,
+                                    "conversation_id": conversation_id,
+                                    "deleted_by": current_user_id
+                                }
+                            )
 
-                        recipients = [
-                            uid for uid in participant_ids
-                            if uid != current_user.id
-                        ]
+                        # ==================================
+                        # DELETE FOR EVERYONE
+                        # ==================================
 
-                        try:
+                        elif delete_type == "everyone":
+
+                            # Only original sender can delete for everyone
+                            if message.sender_id != current_user_id:
+
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "You can only delete your own messages for everyone"
+                                })
+                                continue
+
+                            if message.is_deleted:
+
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "Message is already deleted for everyone"
+                                })
+                                continue
+
+                            message.is_deleted = True
+                            message.content = "This message was deleted"
+
+                            conversation = db.query(ChatConversation).filter(
+                                ChatConversation.id == conversation_id
+                            ).first()
+
+                            if conversation:
+                                conversation.updated_at = datetime.now(timezone.utc)
+
+                            try:
+
+                                db.commit()
+
+                            except Exception:
+
+                                db.rollback()
+                                logger.exception("Delete for everyone failed")
+
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "Unable to delete message"
+                                })
+                                continue
+
+                            event = {
+                                "type": "message_deleted",
+                                "message_id": message_id,
+                                "conversation_id": conversation_id,
+                                "deleted_by": current_user_id,
+                                "content": "This message was deleted",
+                                "is_deleted": True
+                            }
+
+                            recipients = [
+                                uid for uid in participant_ids
+                                if uid != current_user_id
+                            ]
 
                             await chat_manager.broadcast(
                                 conversation_id,
@@ -1053,17 +1135,16 @@ async def chat_websocket(
                                 event
                             )
 
-                        except Exception:
-                            logger.exception("Message delete broadcast failed")
-
-                        # Sender ko confirmation
-                        await websocket.send_json({
-                            **event,
-                            "type": "delete_success"
-                        })
+                            await websocket.send_json({
+                                **event,
+                                "type": "delete_everyone_success"
+                            })
 
                         continue
 
+
+
+                    
                     # ======================================
                     # SEND MESSAGE
                     # ======================================

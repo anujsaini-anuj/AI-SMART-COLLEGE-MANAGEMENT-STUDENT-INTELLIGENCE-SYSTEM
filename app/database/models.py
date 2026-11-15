@@ -2227,3 +2227,49 @@ class ChatMessageReceipt(Base):
         DateTime(timezone=True),
         nullable=True
     )
+
+
+
+
+
+# ==================================================
+# CHAT MESSAGE DELETIONS (DELETE FOR ME)
+# ==================================================
+
+class ChatMessageDeletion(Base):
+
+    __tablename__ = "chat_message_deletions"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id",
+            "user_id",
+            name="uq_chat_message_deletion"
+        ),
+    )
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    message_id = Column(
+        Integer,
+        ForeignKey("chat_messages.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
+    deleted_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
