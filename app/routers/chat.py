@@ -11,7 +11,7 @@ from fastapi import (
 )
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
+from sqlalchemy import func
 from jose import jwt, JWTError
 
 from app.database.database import get_db, SessionLocal
@@ -20,8 +20,6 @@ from app.database.models import (
     Student,
     Faculty,
     HOD,
-    Department,
-    Course,
     Subject,
     FacultySubject,
     ChatConversation,

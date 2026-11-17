@@ -12,8 +12,7 @@ from app.database.models import (
 from app.services.future_prediction_model import (
     train_and_save_future_model,
     load_future_prediction_model,
-    predict_future_performance,
-    retrain_future_model_if_needed
+    predict_future_performance
 )
 
 

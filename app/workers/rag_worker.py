@@ -1,7 +1,6 @@
 import logging
 import os
 
-from redis import Redis
 
 from app.services.rag_queue import (
     rag_queue,
