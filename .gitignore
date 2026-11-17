@@ -7,13 +7,6 @@ env/
 __pycache__/
 *.py[cod]
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
 # Environment variables
 .env
 .env.local
