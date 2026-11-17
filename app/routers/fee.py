@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 
 
 from datetime import date
-from typing import Optional
 
 
 from app.database.database import get_db
